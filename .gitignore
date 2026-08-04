@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+out/
+release/
+.cache/
+
+# Rust / Tauri build artifacts
+src-tauri/target/
+
+# Tauri app log output
+src-tauri/app_output.txt
+
+# macOS
+.DS_Store
+
+# Local Codex account data. Keep real auth.json files out of git.
+data/accounts/*
+!data/accounts/.gitkeep
+data/accounts.json
+
+# Tauri local account data (runtime copies, may contain real auth tokens)
+src-tauri/data/accounts/*
+src-tauri/data/accounts.json
+
+# Backup, environment, and security credentials
+*.bak
+.env
+.env.*
+*.pem
+*.key
+

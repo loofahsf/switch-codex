@@ -1,0 +1,24 @@
+{
+  "name": "switch-codex",
+  "version": "0.0.0",
+  "description": "A macOS-first Tauri app for switching Codex auth.json profiles.",
+  "author": "Switch Codex",
+  "license": "MIT",
+  "private": true,
+  "type": "commonjs",
+  "packageManager": "npm@10.9.3",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:mac:arm": "tauri build --target aarch64-apple-darwin",
+    "build:mac:x64": "tauri build --target x86_64-apple-darwin",
+    "build:win:x64": "tauri build --target x86_64-pc-windows-msvc",
+    "lint": "node --check src/renderer.js"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Switch Codex</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="topbar">
+        <div class="topbar-brand">
+          <svg class="app-logo-icon" viewBox="0 0 24 24" width="40" height="40" xmlns="http://www.w3.org/2000/svg">
+            <path d="M19.503 0H4.496A4.496 4.496 0 000 4.496v15.007A4.496 4.496 0 004.496 24h15.007A4.496 4.496 0 0024 19.503V4.496A4.496 4.496 0 0019.503 0z" fill="#fff"></path>
+            <path d="M9.064 3.344a4.578 4.578 0 012.285-.312c1 .115 1.891.54 2.673 1.275.01.01.024.017.037.021a.09.09 0 00.043 0 4.55 4.55 0 013.046.275l.047.022.116.057a4.581 4.581 0 012.188 2.399c.209.51.313 1.041.315 1.595a4.24 4.24 0 01-.134 1.223.123.123 0 00.03.115c.594.607.988 1.33 1.183 2.17.289 1.425-.007 2.71-.887 3.854l-.136.166a4.548 4.548 0 01-2.201 1.388.123.123 0 00-.081.076c-.191.551-.383 1.023-.74 1.494-.9 1.187-2.222 1.846-3.711 1.838-1.187-.006-2.239-.44-3.157-1.302a.107.107 0 00-.105-.024c-.388.125-.78.143-1.204.138a4.441 4.441 0 01-1.945-.466 4.544 4.544 0 01-1.61-1.335c-.152-.202-.303-.392-.414-.617a5.81 5.81 0 01-.37-.961 4.582 4.582 0 01-.014-2.298.124.124 0 00.006-.056.085.085 0 00-.027-.048 4.467 4.467 0 01-1.034-1.651 3.896 3.896 0 01-.251-1.192 5.189 5.189 0 01.141-1.6c.337-1.112.982-1.985 1.933-2.618.212-.141.413-.251.601-.33.215-.089.43-.164.646-.227a.098.098 0 00.065-.066 4.51 4.51 0 01.829-1.615 4.535 4.535 0 011.837-1.388zm3.482 10.565a.637.637 0 000 1.272h3.636a.637.637 0 100-1.272h-3.636zM8.462 9.23a.637.637 0 00-1.106.631l1.272 2.224-1.266 2.136a.636.636 0 101.095.649l1.454-2.455a.636.636 0 00.005-.64L8.462 9.23z" fill="url(#lobe-icons-codex-header)"></path>
+            <defs>
+              <linearGradient id="lobe-icons-codex-header" x1="12" x2="12" y1="3" y2="21" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#B1A7FF"></stop>
+                <stop offset=".5" stop-color="#7A9DFF"></stop>
+                <stop offset="1" stop-color="#3941FF"></stop>
+              </linearGradient>
+            </defs>
+          </svg>
+          <div>
+            <p class="eyebrow">Codex Account Switcher</p>
+            <h1>Switch Codex</h1>
+          </div>
+        </div>
+        <div class="status" id="activeStatus">未配置账号</div>
+      </section>
+
+      <nav class="view-tabs" aria-label="应用页面">
+        <button type="button" class="view-tab is-active" data-view="accounts" aria-current="page">账号管理</button>
+        <button type="button" class="view-tab" data-view="usage">用量统计</button>
+      </nav>
+
+      <section class="view is-active" id="accountsView">
+        <section class="content-grid">
+          <form class="panel account-form" id="accountForm">
+            <div class="panel-heading">
+              <h2>新增账号</h2>
+              <span>auth.json 会保存到项目 data 目录</span>
+            </div>
+
+            <label class="field">
+              <span>账号名称</span>
+              <input
+                id="accountName"
+                name="accountName"
+                autocomplete="off"
+                placeholder="例如 work / personal"
+                required
+              />
+            </label>
+
+            <div class="field">
+              <span>选择 auth.json</span>
+              <button type="button" class="file-button" id="chooseAuthFile">选择文件</button>
+              <div class="selected-file" id="selectedAuthFile">未选择文件</div>
+            </div>
+
+            <button type="submit" class="primary-button">添加账号</button>
+            <p class="form-message" id="formMessage" role="status"></p>
+          </form>
+
+          <section class="panel account-list-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>账号列表</h2>
+                <span id="accountCount">0 个账号</span>
+              </div>
+              <button type="button" class="refresh-quota-btn" id="refreshAccountQuotas">刷新额度</button>
+            </div>
+            <div class="account-list" id="accountList"></div>
+          </section>
+        </section>
+
+        <section class="paths">
+          <div>
+            <span>项目数据目录</span>
+            <code id="dataDir">-</code>
+          </div>
+          <div>
+            <span>当前生效文件</span>
+            <code id="targetAuthPath">-</code>
+          </div>
+        </section>
+      </section>
+
+      <section class="view usage-view" id="usageView">
+        <div class="usage-toolbar">
+          <div>
+            <p class="section-kicker">Codex usage</p>
+            <h2>订阅配额与本地 token</h2>
+            <p class="usage-intro">配额来自 OpenAI Codex；token 只在本机汇总，不展示或上传对话正文。</p>
+          </div>
+          <div class="usage-controls">
+            <label>
+              <span>统计范围</span>
+              <select id="usageRange">
+                <option value="7">最近 7 天</option>
+                <option value="30" selected>最近 30 天</option>
+                <option value="90">最近 90 天</option>
+                <option value="0">全部记录</option>
+              </select>
+            </label>
+            <button type="button" class="refresh-button" id="refreshUsage">刷新官方数据</button>
+          </div>
+        </div>
+
+        <p class="usage-message" id="usageMessage" role="status"></p>
+
+        <section class="usage-section">
+          <div class="section-heading">
+            <div>
+              <h3>账号配额</h3>
+              <p>5 小时与每周窗口；每个账号独立查询。</p>
+            </div>
+            <span class="source-badge">OpenAI Codex</span>
+          </div>
+          <div class="quota-grid" id="quotaGrid">
+            <div class="usage-empty">打开“用量统计”后将查询账号配额。</div>
+          </div>
+        </section>
+
+        <section class="usage-section local-usage-section">
+          <div class="section-heading">
+            <div>
+              <h3>本机使用量</h3>
+              <p>从 ~/.codex/sessions 汇总；Codex 未在日志中标注账号，因此这里是多账号合计。</p>
+            </div>
+            <span id="usageGeneratedAt">尚未统计</span>
+          </div>
+
+          <div class="metric-grid">
+            <article class="metric-card metric-card-featured">
+              <span>API 等价估算</span>
+              <strong id="estimatedCost">$0.00</strong>
+              <small>订阅账号不会按此金额计费</small>
+            </article>
+            <article class="metric-card">
+              <span>总 token</span>
+              <strong id="totalTokens">0</strong>
+              <small id="sessionCount">0 个会话</small>
+            </article>
+            <article class="metric-card">
+              <span>缓存输入</span>
+              <strong id="cachedTokens">0</strong>
+              <small id="cacheRatio">缓存占比 0%</small>
+            </article>
+            <article class="metric-card">
+              <span>模型输出</span>
+              <strong id="outputTokens">0</strong>
+              <small id="modelCallCount">0 次模型调用</small>
+            </article>
+          </div>
+
+          <div class="usage-detail-grid">
+            <article class="usage-subpanel">
+              <div class="subpanel-heading">
+                <h4>每日趋势</h4>
+                <span>最近 14 个活跃日</span>
+              </div>
+              <div class="daily-chart" id="dailyChart">
+                <div class="usage-empty compact">暂无 token 记录</div>
+              </div>
+            </article>
+
+            <article class="usage-subpanel pricing-panel">
+              <div class="subpanel-heading">
+                <h4>价格来源</h4>
+                <span id="pricingState">等待刷新</span>
+              </div>
+              <p>按标准 API 的输入、缓存输入、缓存写入与输出价格估算，长上下文请求使用对应费率。</p>
+              <a
+                id="pricingSource"
+                href="https://developers.openai.com/api/docs/pricing"
+                target="_blank"
+                rel="noreferrer"
+              >
+                OpenAI 官方模型价格
+              </a>
+              <small id="pricingUpdatedAt">尚未加载价格</small>
+            </article>
+          </div>
+
+          <div class="model-table-wrap">
+            <table class="model-table">
+              <thead>
+                <tr>
+                  <th>模型</th>
+                  <th>输入 token</th>
+                  <th>缓存输入</th>
+                  <th>输出 token</th>
+                  <th>总 token</th>
+                  <th>API 等价估算</th>
+                </tr>
+              </thead>
+              <tbody id="modelUsageRows">
+                <tr>
+                  <td colspan="6" class="table-empty">暂无 token 记录</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="usage-footnote">
+            金额仅用于比较模型消耗，不是 ChatGPT/Codex 订阅账单；工具调用等额外费用未计入。账号维度请以顶部的
+            OpenAI 配额为准。
+          </p>
+        </section>
+      </section>
+    </main>
+
+    <template id="accountItemTemplate">
+      <article class="account-item">
+        <div class="account-header">
+          <div class="account-main">
+            <div class="account-title-row">
+              <span class="account-name"></span>
+              <span class="account-plan-badge"></span>
+            </div>
+            <div class="account-path"></div>
+          </div>
+          <div class="account-actions">
+            <span class="active-pill">已生效</span>
+            <button type="button" class="switch-button">切换</button>
+            <button type="button" class="danger-button">删除</button>
+          </div>
+        </div>
+        <div class="account-quota-box">
+          <div class="account-quota-grid">
+            <div class="account-quota-item" data-window="five_hour">
+              <div class="account-quota-label">
+                <span>5小时限额</span>
+                <strong class="account-quota-val">-</strong>
+              </div>
+              <div class="account-quota-track"><div class="account-quota-fill"></div></div>
+              <span class="account-quota-reset">-</span>
+            </div>
+            <div class="account-quota-item" data-window="weekly">
+              <div class="account-quota-label">
+                <span>周限额</span>
+                <strong class="account-quota-val">-</strong>
+              </div>
+              <div class="account-quota-track"><div class="account-quota-fill"></div></div>
+              <span class="account-quota-reset">-</span>
+            </div>
+            <div class="account-quota-item" data-window="monthly">
+              <div class="account-quota-label">
+                <span>月限额</span>
+                <strong class="account-quota-val">-</strong>
+              </div>
+              <div class="account-quota-track"><div class="account-quota-fill"></div></div>
+              <span class="account-quota-reset">-</span>
+            </div>
+          </div>
+          <div class="account-quota-meta">
+            <span class="account-quota-status">等待加载额度...</span>
+          </div>
+        </div>
+      </article>
+    </template>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

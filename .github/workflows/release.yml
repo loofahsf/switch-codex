@@ -1,0 +1,192 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint
+        run: npm run lint
+
+  version-and-tag:
+    needs: lint
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag_name: ${{ steps.bump.outputs.tag_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine and create tag
+        id: bump
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const { execSync } = require('child_process');
+          const fs = require('fs');
+
+          const ref = process.env.GITHUB_REF || '';
+          let tagName = '';
+          let version = '';
+
+          if (ref.startsWith('refs/tags/v')) {
+            tagName = ref.replace('refs/tags/', '');
+            const match = /^v(\d+\.\d+\.\d+)$/.exec(tagName);
+            if (!match) throw new Error(`Invalid tag format: ${tagName}`);
+            version = match[1];
+          } else {
+            let latestTag = '';
+            try {
+              latestTag = execSync('git describe --tags --abbrev=0', { encoding: 'utf8' }).trim();
+            } catch (e) {
+              latestTag = 'v1.0.0';
+            }
+
+            const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(latestTag);
+            if (match) {
+              const major = parseInt(match[1], 10);
+              const minor = parseInt(match[2], 10);
+              const patch = parseInt(match[3], 10) + 1;
+              version = `${major}.${minor}.${patch}`;
+            } else {
+              version = '1.0.1';
+            }
+            tagName = `v${version}`;
+
+            execSync('git config user.name "github-actions[bot]"');
+            execSync('git config user.email "github-actions[bot]@users.noreply.github.com"');
+
+            console.log(`Creating and pushing tag ${tagName}...`);
+            execSync(`git tag ${tagName}`);
+            execSync(`git push origin ${tagName}`);
+          }
+
+          console.log(`Target version: ${version}, tag: ${tagName}`);
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag_name=${tagName}\n`);
+          NODE
+
+  build:
+    needs: [lint, version-and-tag]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: mac-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            script: build:mac:arm
+          - name: mac-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            script: build:mac:x64
+          - name: win-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            script: build:win:x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set version in project files
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const version = '${{ needs.version-and-tag.outputs.version }}';
+          if (!version) throw new Error('Version is missing from previous job!');
+
+          // package.json
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = version;
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+
+          // src-tauri/tauri.conf.json
+          const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+          conf.version = version;
+          fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
+
+          // src-tauri/Cargo.toml — replace version = "..." in [package] section only
+          let cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8');
+          cargo = cargo.replace(/^version = "[^"]*"/m, `version = "${version}"`);
+          fs.writeFileSync('src-tauri/Cargo.toml', cargo);
+
+          console.log(`Updated project files to version ${version}`);
+          NODE
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run ${{ matrix.script }}
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+          TAURI_SIGNING_PRIVATE_KEY: ""
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: switch-codex-${{ matrix.name }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+          if-no-files-found: warn
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version-and-tag.outputs.tag_name }}
+          name: Release ${{ needs.version-and-tag.outputs.tag_name }}
+          files: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+
