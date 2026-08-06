@@ -168,6 +168,37 @@ jobs:
           APPLE_SIGNING_IDENTITY: "-"
           TAURI_SIGNING_PRIVATE_KEY: ""
 
+      - name: Rename artifacts (remove en-us tag)
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          function walk(dir) {
+            if (!fs.existsSync(dir)) return;
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+              const fullPath = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                walk(fullPath);
+              } else if (entry.isFile()) {
+                const lowerName = entry.name.toLowerCase();
+                if (lowerName.includes('en-us') || lowerName.includes('en_us')) {
+                  const newName = entry.name
+                    .replace(/[-_]en[-_]us/gi, '')
+                    .replace(/en[-_]us[-_]?/gi, '');
+                  const newPath = path.join(dir, newName);
+                  console.log(`Renaming ${fullPath} -> ${newPath}`);
+                  fs.renameSync(fullPath, newPath);
+                }
+              }
+            }
+          }
+
+          walk('src-tauri/target/${{ matrix.target }}/release/bundle');
+          NODE
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:

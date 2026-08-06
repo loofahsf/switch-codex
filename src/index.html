@@ -40,27 +40,39 @@
             <div class="panel-heading">
               <h2>新增账号</h2>
               <span>auth.json 会保存到项目 data 目录</span>
+              <button
+                type="button"
+                class="panel-toggle"
+                id="toggleAccountForm"
+                aria-expanded="true"
+                aria-controls="accountFormContent"
+                aria-label="收起新增账号表单"
+              >
+                收起
+              </button>
             </div>
 
-            <label class="field">
-              <span>账号名称</span>
-              <input
-                id="accountName"
-                name="accountName"
-                autocomplete="off"
-                placeholder="例如 work / personal"
-                required
-              />
-            </label>
+            <div class="account-form-content" id="accountFormContent">
+              <label class="field">
+                <span>账号名称</span>
+                <input
+                  id="accountName"
+                  name="accountName"
+                  autocomplete="off"
+                  placeholder="例如 work / personal"
+                  required
+                />
+              </label>
 
-            <div class="field">
-              <span>选择 auth.json</span>
-              <button type="button" class="file-button" id="chooseAuthFile">选择文件</button>
-              <div class="selected-file" id="selectedAuthFile">未选择文件</div>
+              <div class="field">
+                <span>选择 auth.json</span>
+                <button type="button" class="file-button" id="chooseAuthFile">选择文件</button>
+                <div class="selected-file" id="selectedAuthFile">未选择文件</div>
+              </div>
+
+              <button type="submit" class="primary-button">添加账号</button>
+              <p class="form-message" id="formMessage" role="status"></p>
             </div>
-
-            <button type="submit" class="primary-button">添加账号</button>
-            <p class="form-message" id="formMessage" role="status"></p>
           </form>
 
           <section class="panel account-list-panel">

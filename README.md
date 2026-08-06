@@ -1,33 +1,33 @@
 # Switch Codex
 
-Switch Codex is a macOS-first Tauri app for managing multiple Codex `auth.json` profiles.
+Switch Codex 是一款基于 Tauri 构建、以 macOS 优先的多 Codex `auth.json` 账号配置管理与快速切换桌面应用。
 
-## Features
+## 功能特性
 
-- Configure multiple Codex account names.
-- Associate each account with an `auth.json` file stored under this project in `data/accounts/<account-id>/auth.json`.
-- Mark one account as active and atomically replace `~/.codex/auth.json`.
-- Switch accounts from the app window, the macOS application menu, or the macOS menu bar status item.
-- Validate imported auth files and keep the previous active file at `~/.codex/auth.json.switch-codex.bak`.
-- Query each saved ChatGPT Codex account's current subscription usage windows.
-- Aggregate local input, cached input, cache-write, output, and reasoning token counts from `~/.codex/sessions`.
-- Estimate an API-equivalent USD cost with prices refreshed from the [official OpenAI pricing page](https://developers.openai.com/api/docs/pricing).
+- 支持配置多个 Codex 账号名称。
+- 将每个账号关联至项目本地存储的 `auth.json` 文件（存储于 `data/accounts/<account-id>/auth.json`）。
+- 将指定账号标记为当前激活账号，并原子化替换 `~/.codex/auth.json`。
+- 支持通过应用窗口、macOS 应用菜单或 macOS 菜单栏状态栏图标（Status Item）快捷切换账号。
+- 校验导入的凭证文件，并在切换时保留前一次激活文件的备份 `~/.codex/auth.json.switch-codex.bak`。
+- 查询各已保存 ChatGPT Codex 账号当前的订阅用量窗口（Usage Windows）。
+- 汇总本地 `~/.codex/sessions` 中的输入 Token、缓存输入 Token、缓存写入 Token、输出 Token 及推理 Token 数量。
+- 根据从 [OpenAI 官方价格页面](https://developers.openai.com/api/docs/pricing) 自动刷新的价格，估算等效 API 的美元费用。
 
-## Usage Statistics
+## 用量统计
 
-Open the **用量统计** tab to see:
+打开 **用量统计** 标签页即可查看：
 
-- Independent short-window and weekly quota percentages for each saved account.
-- Local token totals by model and day.
-- An API-equivalent cost estimate based on OpenAI's standard per-token prices.
+- 每个已保存账号独立的短窗口与周度配额百分比。
+- 按模型和日期分类汇总的本地 Token 总量。
+- 基于 OpenAI 标准按 Token 计价估算的等效 API 成本。
 
-The quota request uses the same read-only ChatGPT Codex usage endpoint and account header as the official Codex client. Credentials are read in the Rust backend and are never returned to the renderer or written to logs. Session files are parsed locally; only timestamps, model names, and token counters are retained and returned.
+用量配额查询使用与官方 Codex 客户端相同的只读 ChatGPT Codex 用量接口及账号 Header。凭证信息仅在 Rust 后端读取，绝不会返回给渲染进程或写入日志。Session 日志文件仅在本地解析，仅提取并保存时间戳、模型名称和 Token 计数器。
 
-ChatGPT/Codex paid plans are subscription products, so the displayed USD amount is a comparison estimate rather than an actual bill. Models without a published price are excluded from the estimate. The last successfully fetched official price catalog is cached in the app data directory for offline use.
+由于 ChatGPT/Codex 付费计划属于订阅制产品，界面展示的美元金额为对比参考估算值，而非实际账单。未公布价格的模型不计入成本估算。最近一次成功获取的官方价格目录会缓存至应用数据目录以供离线使用。
 
-Codex session JSONL files currently do not identify the user/account attached to each token event. Account quota cards are therefore per-account, while historical local token and cost totals are combined across accounts on this machine.
+由于 Codex Session JSONL 文件目前未记录每个 Token 事件对应的用户/账号，因此账号配额卡片为按账号独立显示，而历史本地 Token 及成本汇总为本台机器上所有账号的合并数据。
 
-## Run
+## 运行开发
 
 ```bash
 nvm use
@@ -35,7 +35,7 @@ npm install
 npm run dev
 ```
 
-## Build Packages
+## 打包构建
 
 ```bash
 npm run build:mac:arm
@@ -43,18 +43,18 @@ npm run build:mac:x64
 npm run build:win:x64
 ```
 
-Build outputs are written to `src-tauri/target/<target>/release/bundle/`.
+构建产物输出至 `src-tauri/target/<target>/release/bundle/`。
 
-Mac arm64 and x64 packages should be built on macOS. Windows amd64 packages can be built on Windows or via GitHub Actions.
+Mac arm64 和 x64 安装包建议在 macOS 环境下构建。Windows x64 安装包可在 Windows 本地或通过 GitHub Actions 进行构建。
 
 ## GitHub Actions
 
-- Every pull request runs `npm ci` and `npm run lint`.
-- Pushing code to `master` (or manual trigger) automatically checks the latest Git Tag, increments the patch version (e.g. `v1.0.8` -> `v1.0.9`), pushes the new tag to GitHub, builds packages across targeted platforms (macOS arm64, macOS x64, Windows x64), and attaches the assets to GitHub Releases.
+- 每次 Pull Request 都会自动运行 `npm ci` 和 `npm run lint`。
+- 推送代码至 `master` 分支（或手动触发 workflow）会自动检查最新的 Git Tag，自动递增补丁版本号（例如 `v1.0.8` -> `v1.0.9`），将新 Tag 推送至 GitHub，构建多平台安装包（macOS arm64, macOS x64, Windows x64），并将构建产物自动附加发布至 GitHub Releases。
 
-## Data Location
+## 数据存储路径
 
-By default, account data is stored in:
+默认情况下，账号数据存储在：
 
 ```text
 data/
@@ -63,13 +63,13 @@ data/
     <account-id>/auth.json
 ```
 
-You can override this location with `CODEX_SWITCH_DATA_DIR` if needed.
+如有需要，可以通过环境变量 `CODEX_SWITCH_DATA_DIR` 覆盖此存储路径。
 
-## Platform Notes
+## 平台说明
 
-The current project is macOS-first with Windows support. The core file-copying logic uses Rust backend APIs and is kept platform-neutral.
+本项目以 macOS 优先并兼顾 Windows 支持。核心的文件复制与原子切换逻辑使用 Rust 后端 API 实现，保持平台无关性。
 
-## License
+## 开源协议
 
-This project is licensed under the [MIT License](LICENSE).
+本项目采用 [MIT License](LICENSE) 开源协议。
 

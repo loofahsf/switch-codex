@@ -9,6 +9,8 @@ const formMessage = document.querySelector('#formMessage');
 const activeStatus = document.querySelector('#activeStatus');
 const accountCount = document.querySelector('#accountCount');
 const accountList = document.querySelector('#accountList');
+const contentGrid = document.querySelector('.content-grid');
+const toggleAccountFormButton = document.querySelector('#toggleAccountForm');
 const dataDir = document.querySelector('#dataDir');
 const targetAuthPath = document.querySelector('#targetAuthPath');
 const template = document.querySelector('#accountItemTemplate');
@@ -41,6 +43,14 @@ let selectedAuth = null;
 let usageLoaded = false;
 let usageLoading = false;
 let currentQuotas = null;
+
+function setAccountFormCollapsed(collapsed) {
+  contentGrid.classList.toggle('is-form-collapsed', collapsed);
+  accountForm.classList.toggle('is-collapsed', collapsed);
+  toggleAccountFormButton.setAttribute('aria-expanded', String(!collapsed));
+  toggleAccountFormButton.setAttribute('aria-label', collapsed ? '展开新增账号表单' : '收起新增账号表单');
+  toggleAccountFormButton.textContent = collapsed ? '展开' : '收起';
+}
 
 function setMessage(message, type = 'neutral') {
   formMessage.textContent = message;
@@ -644,6 +654,9 @@ function switchView(viewName) {
 
 chooseAuthFileButton.addEventListener('click', chooseAuthFile);
 accountForm.addEventListener('submit', addAccount);
+toggleAccountFormButton.addEventListener('click', () => {
+  setAccountFormCollapsed(!accountForm.classList.contains('is-collapsed'));
+});
 refreshUsageButton.addEventListener('click', () => refreshUsage());
 if (refreshAccountQuotasButton) {
   refreshAccountQuotasButton.addEventListener('click', loadAccountQuotas);
