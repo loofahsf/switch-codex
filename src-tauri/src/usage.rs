@@ -117,8 +117,11 @@ struct RolloutEvent {
 struct RolloutPayload {
     #[serde(rename = "type")]
     event_type: Option<String>,
+    turn_id: Option<String>,
     model: Option<String>,
     info: Option<TokenInfo>,
+    duration_ms: Option<u64>,
+    time_to_first_token_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,8 +134,20 @@ struct TokenInfo {
 struct ModelAccumulator {
     usage: TokenUsage,
     model_calls: u64,
+    turn_count: u64,
+    turn_tokens: u64,
+    duration_samples: u64,
+    total_duration_ms: u64,
+    time_to_first_token_samples: u64,
+    total_time_to_first_token_ms: u64,
     estimated_cost_usd: f64,
     has_price: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TurnAccumulator {
+    model: String,
+    usage: TokenUsage,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -167,6 +182,10 @@ pub struct ModelUsageItem {
     reasoning_output_tokens: u64,
     total_tokens: u64,
     model_calls: u64,
+    turn_count: u64,
+    average_tokens_per_turn: Option<f64>,
+    average_duration_ms: Option<f64>,
+    average_time_to_first_token_ms: Option<f64>,
     estimated_cost_usd: Option<f64>,
     price: Option<DisplayedPrice>,
 }
@@ -700,6 +719,7 @@ fn aggregate_sessions(
     days: u32,
     catalog: PriceCatalog,
 ) -> Result<UsageStats, String> {
+    // 根据用户选择的时间范围确定统计截止点，并收集所有本机会话日志。
     let cutoff = if days == 0 {
         None
     } else {
@@ -718,24 +738,38 @@ fn aggregate_sessions(
             Err(_) => continue,
         };
         let mut current_model = "unknown".to_string();
+        let mut active_turn_id = None;
+        let mut turns = HashMap::<String, TurnAccumulator>::new();
         let mut previous_total = TokenUsage::default();
         let mut counted_session = false;
 
+        // 逐行解析结构化事件，避免加载或保留用户消息正文。
         for line in BufReader::new(file).lines().map_while(Result::ok) {
-            // Typed deserialization skips message bodies and unrelated rollout
-            // fields instead of retaining the full JSON object in memory.
             let Ok(event) = serde_json::from_str::<RolloutEvent>(&line) else {
                 continue;
             };
             match event.event_type.as_str() {
                 "turn_context" => {
+                    // 回合上下文同时提供模型和 turn_id，用于后续 Token 与耗时归属。
                     if let Some(model) =
                         event.payload.model.filter(|model| !model.trim().is_empty())
                     {
                         current_model = model;
                     }
+                    if let Some(turn_id) = event.payload.turn_id {
+                        active_turn_id = Some(turn_id.clone());
+                        turns.entry(turn_id).or_default().model = current_model.clone();
+                    }
+                }
+                "event_msg" if event.payload.event_type.as_deref() == Some("task_started") => {
+                    // 提前建立回合容器，兼容 turn_context 晚于 task_started 的日志顺序。
+                    if let Some(turn_id) = event.payload.turn_id {
+                        active_turn_id = Some(turn_id.clone());
+                        turns.entry(turn_id).or_default();
+                    }
                 }
                 "event_msg" if event.payload.event_type.as_deref() == Some("token_count") => {
+                    // 单个问题可能触发多次模型调用，先累计到当前回合再更新模型总量。
                     let Some(info) = event.payload.info else {
                         continue;
                     };
@@ -763,6 +797,16 @@ fn aggregate_sessions(
                         continue;
                     }
 
+                    if let Some(turn) = active_turn_id
+                        .as_deref()
+                        .and_then(|turn_id| turns.get_mut(turn_id))
+                    {
+                        if turn.model.is_empty() {
+                            turn.model = current_model.clone();
+                        }
+                        turn.usage.add_assign(usage);
+                    }
+
                     if !counted_session {
                         session_count = session_count.saturating_add(1);
                         counted_session = true;
@@ -786,11 +830,66 @@ fn aggregate_sessions(
                     day.usage.add_assign(usage);
                     day.estimated_cost_usd += cost;
                 }
+                "event_msg" if event.payload.event_type.as_deref() == Some("task_complete") => {
+                    // 仅完整且有 Token 数据的回合进入问题均值，避免旧日志缺字段时被当成零消耗。
+                    let Some(turn_id) = event.payload.turn_id else {
+                        continue;
+                    };
+                    if active_turn_id.as_deref() == Some(turn_id.as_str()) {
+                        active_turn_id = None;
+                    }
+                    let Some(turn) = turns.remove(&turn_id).filter(|turn| !turn.usage.is_empty())
+                    else {
+                        continue;
+                    };
+                    let Some(timestamp) = event
+                        .timestamp
+                        .as_deref()
+                        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                        .map(|value| value.with_timezone(&Utc))
+                    else {
+                        continue;
+                    };
+                    if cutoff.is_some_and(|cutoff| timestamp < cutoff) {
+                        continue;
+                    }
+
+                    let model_name = if turn.model.trim().is_empty() {
+                        current_model.clone()
+                    } else {
+                        turn.model
+                    };
+                    let model = models.entry(model_name).or_default();
+                    model.turn_count = model.turn_count.saturating_add(1);
+                    model.turn_tokens = model.turn_tokens.saturating_add(turn.usage.total_tokens());
+                    if let Some(duration_ms) = event.payload.duration_ms {
+                        model.duration_samples = model.duration_samples.saturating_add(1);
+                        model.total_duration_ms =
+                            model.total_duration_ms.saturating_add(duration_ms);
+                    }
+                    if let Some(time_to_first_token_ms) = event.payload.time_to_first_token_ms {
+                        model.time_to_first_token_samples =
+                            model.time_to_first_token_samples.saturating_add(1);
+                        model.total_time_to_first_token_ms = model
+                            .total_time_to_first_token_ms
+                            .saturating_add(time_to_first_token_ms);
+                    }
+                }
+                "event_msg" if event.payload.event_type.as_deref() == Some("turn_aborted") => {
+                    // 中止回合没有完整响应，不参与平均值并释放临时累计数据。
+                    if let Some(turn_id) = event.payload.turn_id {
+                        turns.remove(&turn_id);
+                        if active_turn_id.as_deref() == Some(turn_id.as_str()) {
+                            active_turn_id = None;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
     }
 
+    // 汇总全局 Token、调用次数与成本，模型性能均值保留在各模型条目中。
     let mut total_usage = TokenUsage::default();
     let mut total_calls = 0_u64;
     let mut total_cost = 0.0;
@@ -813,6 +912,16 @@ fn aggregate_sessions(
                 reasoning_output_tokens: accumulator.usage.reasoning_output_tokens,
                 total_tokens: accumulator.usage.total_tokens(),
                 model_calls: accumulator.model_calls,
+                turn_count: accumulator.turn_count,
+                average_tokens_per_turn: average(accumulator.turn_tokens, accumulator.turn_count),
+                average_duration_ms: average(
+                    accumulator.total_duration_ms,
+                    accumulator.duration_samples,
+                ),
+                average_time_to_first_token_ms: average(
+                    accumulator.total_time_to_first_token_ms,
+                    accumulator.time_to_first_token_samples,
+                ),
                 estimated_cost_usd: accumulator
                     .has_price
                     .then_some(accumulator.estimated_cost_usd),
@@ -860,6 +969,10 @@ fn aggregate_sessions(
         models: model_items,
         daily,
     })
+}
+
+fn average(total: u64, count: u64) -> Option<f64> {
+    (count > 0).then(|| total as f64 / count as f64)
 }
 
 fn collect_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -1077,6 +1190,85 @@ Batch
         assert_eq!(stats.summary.total_tokens, 1100);
         assert_eq!(stats.models[0].model, "gpt-test");
         assert!((stats.summary.estimated_cost_usd - 0.0071).abs() < 0.000_001);
+
+        std::fs::remove_dir_all(sessions_dir).unwrap();
+    }
+
+    #[test]
+    fn aggregates_model_per_turn_performance_metrics() {
+        let sessions_dir =
+            std::env::temp_dir().join(format!("switch-codex-turns-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let timestamp = Utc::now().to_rfc3339();
+        let rollout = format!(
+            "{{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"turn-1\"}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"turn_context\",\"payload\":{{\"turn_id\":\"turn-1\",\"model\":\"gpt-test\"}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"input_tokens\":600,\"output_tokens\":100}}}}}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"input_tokens\":300,\"output_tokens\":100}}}}}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"turn-1\",\"duration_ms\":2000,\"time_to_first_token_ms\":400}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"turn-2\"}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"turn_context\",\"payload\":{{\"turn_id\":\"turn-2\",\"model\":\"gpt-test\"}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"input_tokens\":500,\"output_tokens\":50}}}}}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"turn-2\",\"duration_ms\":4000,\"time_to_first_token_ms\":600}}}}\n"
+        );
+        std::fs::write(sessions_dir.join("rollout.jsonl"), rollout).unwrap();
+
+        let catalog = PriceCatalog {
+            source: PricingSource {
+                url: OFFICIAL_PRICING_URL.to_string(),
+                fetched_at: timestamp,
+                kind: "test".to_string(),
+                model_count: 0,
+                warning: None,
+            },
+            prices: Vec::new(),
+        };
+        let stats = aggregate_sessions(&sessions_dir, 30, catalog).unwrap();
+        let model = &stats.models[0];
+
+        assert_eq!(model.model, "gpt-test");
+        assert_eq!(model.model_calls, 3);
+        assert_eq!(model.turn_count, 2);
+        assert_eq!(model.average_tokens_per_turn, Some(825.0));
+        assert_eq!(model.average_duration_ms, Some(3000.0));
+        assert_eq!(model.average_time_to_first_token_ms, Some(500.0));
+
+        std::fs::remove_dir_all(sessions_dir).unwrap();
+    }
+
+    #[test]
+    fn excludes_aborted_turns_and_keeps_missing_timing_metrics_nullable() {
+        let sessions_dir =
+            std::env::temp_dir().join(format!("switch-codex-turns-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let timestamp = Utc::now().to_rfc3339();
+        let rollout = format!(
+            "{{\"timestamp\":\"{timestamp}\",\"type\":\"turn_context\",\"payload\":{{\"turn_id\":\"turn-aborted\",\"model\":\"gpt-test\"}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"input_tokens\":100,\"output_tokens\":50}}}}}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"turn_aborted\",\"turn_id\":\"turn-aborted\"}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"turn_context\",\"payload\":{{\"turn_id\":\"turn-complete\",\"model\":\"gpt-test\"}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"input_tokens\":150,\"output_tokens\":50}}}}}}}}\n\
+             {{\"timestamp\":\"{timestamp}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"turn-complete\",\"duration_ms\":3000}}}}\n"
+        );
+        std::fs::write(sessions_dir.join("rollout.jsonl"), rollout).unwrap();
+
+        let catalog = PriceCatalog {
+            source: PricingSource {
+                url: OFFICIAL_PRICING_URL.to_string(),
+                fetched_at: timestamp,
+                kind: "test".to_string(),
+                model_count: 0,
+                warning: None,
+            },
+            prices: Vec::new(),
+        };
+        let stats = aggregate_sessions(&sessions_dir, 30, catalog).unwrap();
+        let model = &stats.models[0];
+
+        assert_eq!(model.turn_count, 1);
+        assert_eq!(model.average_tokens_per_turn, Some(200.0));
+        assert_eq!(model.average_duration_ms, Some(3000.0));
+        assert_eq!(model.average_time_to_first_token_ms, None);
 
         std::fs::remove_dir_all(sessions_dir).unwrap();
     }

@@ -959,6 +959,7 @@ h4 {
 
 .model-table {
   width: 100%;
+  min-width: 1080px;
   border-collapse: collapse;
   font-size: 12px;
 }

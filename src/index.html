@@ -205,19 +205,23 @@
                   <th>缓存输入</th>
                   <th>输出 token</th>
                   <th>总 token</th>
+                  <th title="包含完整 task_complete 且有 token 数据的回合">问题数</th>
+                  <th>平均 token/问题</th>
+                  <th title="从问题开始到模型首次输出 token">平均首响应</th>
+                  <th title="包含推理、工具调用和文件操作的完整回合耗时">平均完整耗时</th>
                   <th>API 等价估算</th>
                 </tr>
               </thead>
               <tbody id="modelUsageRows">
                 <tr>
-                  <td colspan="6" class="table-empty">暂无 token 记录</td>
+                  <td colspan="10" class="table-empty">暂无 token 记录</td>
                 </tr>
               </tbody>
             </table>
           </div>
           <p class="usage-footnote">
             金额仅用于比较模型消耗，不是 ChatGPT/Codex 订阅账单；工具调用等额外费用未计入。账号维度请以顶部的
-            OpenAI 配额为准。
+            OpenAI 配额为准。性能均值按完整问题回合统计；“完整耗时”包含推理、工具调用和文件操作。
           </p>
         </section>
       </section>

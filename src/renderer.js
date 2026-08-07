@@ -205,6 +205,23 @@ function formatUsd(value) {
   }).format(amount);
 }
 
+function formatDuration(value) {
+  if (value == null || !Number.isFinite(Number(value))) {
+    return '—';
+  }
+  const milliseconds = Number(value);
+  if (milliseconds < 1000) {
+    return `${Math.round(milliseconds)} ms`;
+  }
+  const totalSeconds = Math.round(milliseconds / 1000);
+  if (totalSeconds < 60) {
+    return `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)} 秒`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分`;
+}
+
 function formatDateTime(value) {
   if (!value) {
     return '未知';
@@ -531,7 +548,7 @@ function renderModelRows(models) {
   if (!models?.length) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
-    cell.colSpan = 6;
+    cell.colSpan = 10;
     cell.className = 'table-empty';
     cell.textContent = '暂无 token 记录';
     row.append(cell);
@@ -547,6 +564,10 @@ function renderModelRows(models) {
       formatNumber(model.cachedInputTokens),
       formatNumber(model.outputTokens),
       formatNumber(model.totalTokens),
+      formatNumber(model.turnCount),
+      model.averageTokensPerTurn == null ? '—' : formatNumber(Math.round(model.averageTokensPerTurn)),
+      formatDuration(model.averageTimeToFirstTokenMs),
+      formatDuration(model.averageDurationMs),
       model.estimatedCostUsd == null ? '暂无官方价格' : formatUsd(model.estimatedCostUsd)
     ];
     values.forEach((value, index) => {
@@ -555,7 +576,7 @@ function renderModelRows(models) {
       if (index === 0) {
         cell.className = 'model-name';
       }
-      if (index === 5 && model.estimatedCostUsd == null) {
+      if (index === 9 && model.estimatedCostUsd == null) {
         cell.className = 'unpriced';
       }
       row.append(cell);
