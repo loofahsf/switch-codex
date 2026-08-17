@@ -1,6 +1,5 @@
 use crate::store::{write_file_atomic, AccountsState};
 use chrono::{DateTime, Local, Utc};
-use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -293,21 +292,23 @@ pub async fn get_account_quotas(state: &AccountsState) -> AccountQuotas {
         }
     };
 
-    let futures = state.accounts.iter().map(|account| {
+    let mut accounts = Vec::with_capacity(state.accounts.len());
+    for (index, account) in state.accounts.iter().enumerate() {
+        if index > 0 {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
         let auth_path = if account.is_active {
             PathBuf::from(&state.target_auth_path)
         } else {
             PathBuf::from(&account.auth_path)
         };
-        let account_id = account.id.clone();
-        let account_name = account.name.clone();
-        let client = &client;
-        async move { fetch_account_quota(client, &account_id, &account_name, &auth_path).await }
-    });
+        let quota = fetch_account_quota(&client, &account.id, &account.name, &auth_path).await;
+        accounts.push(quota);
+    }
 
     AccountQuotas {
         source_url: CODEX_USAGE_URL.to_string(),
-        accounts: join_all(futures).await,
+        accounts,
     }
 }
 
@@ -359,7 +360,10 @@ async fn fetch_account_quota(
         .get(CODEX_USAGE_URL)
         .bearer_auth(access_token)
         .header(reqwest::header::ACCEPT, "application/json")
-        .header(reqwest::header::USER_AGENT, "switch-codex/usage");
+        .header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        );
 
     if let Some(chatgpt_account_id) = auth
         .pointer("/tokens/account_id")
@@ -372,11 +376,14 @@ async fn fetch_account_quota(
     let response = match request.send().await {
         Ok(response) => response,
         Err(error) => {
-            return quota_error(
-                account_id.to_string(),
-                account_name.to_string(),
-                &format!("查询失败: {error}"),
-            );
+            let err_msg = if error.is_timeout() {
+                "网络请求超时，请检查代理连接是否正常".to_string()
+            } else if error.is_connect() {
+                "网络连接失败，请检查网络代理（建议开启全局代理或 TUN 模式）".to_string()
+            } else {
+                format!("查询失败: {error}")
+            };
+            return quota_error(account_id.to_string(), account_name.to_string(), &err_msg);
         }
     };
 

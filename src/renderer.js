@@ -687,6 +687,19 @@ for (const tab of viewTabs) {
   tab.addEventListener('click', () => switchView(tab.dataset.view));
 }
 
+document.addEventListener('click', (e) => {
+  const anchor = e.target.closest('a[href^="http://"], a[href^="https://"]');
+  if (anchor) {
+    e.preventDefault();
+    const url = anchor.getAttribute('href') || anchor.href;
+    if (url) {
+      invoke('open_url', { url }).catch((err) => {
+        console.error('Failed to open URL:', err);
+      });
+    }
+  }
+});
+
 async function init() {
   await loadAccounts();
   listen('accounts-changed', (event) => {

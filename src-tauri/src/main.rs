@@ -120,6 +120,11 @@ async fn get_account_quotas(
 }
 
 #[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|e| format!("无法打开链接: {e}"))
+}
+
+#[tauri::command]
 async fn choose_auth_file(_app: AppHandle) -> Result<Option<ChosenFile>, String> {
     let default_dir = dirs::home_dir()
         .map(|h| h.join(".codex"))
@@ -511,6 +516,7 @@ fn main() {
             choose_auth_file,
             get_usage_stats,
             get_account_quotas,
+            open_url,
         ])
         .build(context)
         .expect("error while building tauri application")
