@@ -27,6 +27,8 @@ const views = {
 const refreshAccountQuotasButton = document.querySelector('#refreshAccountQuotas');
 const usageRange = document.querySelector('#usageRange');
 const refreshUsageButton = document.querySelector('#refreshUsage');
+const usageLoadingOverlay = document.querySelector('#usageLoading');
+const usageLoadingText = document.querySelector('#usageLoadingText');
 const usageMessage = document.querySelector('#usageMessage');
 const quotaGrid = document.querySelector('#quotaGrid');
 const usageGeneratedAt = document.querySelector('#usageGeneratedAt');
@@ -42,6 +44,7 @@ const pricingState = document.querySelector('#pricingState');
 const pricingSource = document.querySelector('#pricingSource');
 const pricingUpdatedAt = document.querySelector('#pricingUpdatedAt');
 const modelUsageRows = document.querySelector('#modelUsageRows');
+const toastRegion = document.querySelector('#toastRegion');
 
 let currentState = { accounts: [], activeAccountId: null };
 let selectedAuth = null;
@@ -91,6 +94,34 @@ function setMessage(message, type = 'neutral') {
 function setUsageMessage(message, type = 'neutral') {
   usageMessage.textContent = message;
   usageMessage.dataset.type = type;
+}
+
+function showToast(message, type = 'success') {
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.dataset.type = type;
+  toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  toast.textContent = message;
+  toastRegion.append(toast);
+
+  window.setTimeout(() => {
+    toast.classList.add('is-leaving');
+    window.setTimeout(() => toast.remove(), 160);
+  }, 3200);
+}
+
+function setUsageLoading(loading, message = '正在查询用量数据…') {
+  usageLoadingOverlay.hidden = !loading;
+  usageLoadingText.textContent = message;
+  views.usage.setAttribute('aria-busy', String(loading));
+  refreshUsageButton.disabled = loading;
+  usageRange.disabled = loading;
+}
+
+function waitForPaint() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+  });
 }
 
 function render(state) {
@@ -193,9 +224,15 @@ async function switchAccount(accountId) {
     const nextState = await invoke('switch_account', { accountId });
     render(nextState);
     const account = nextState.accounts.find((item) => item.id === accountId);
-    setMessage(account ? `已切换到 ${account.name}` : '已切换账号', 'success');
+    const message = account
+      ? `已切换到「${account.name}」，~/.codex/auth.json 已更新`
+      : '~/.codex/auth.json 已更新';
+    setMessage(message, 'success');
+    showToast(message, 'success');
   } catch (error) {
-    setMessage(typeof error === 'string' ? error : error.message, 'error');
+    const message = (typeof error === 'string' ? error : error?.message) || '切换账号失败';
+    setMessage(message, 'error');
+    showToast(message, 'error');
   }
 }
 
@@ -237,10 +274,14 @@ async function updateAccountAuth(accountId, accountName, button) {
     if (result.updated && result.state) {
       currentQuotas = null;
       render(result.state);
-      setMessage(`已用当前 ~/.codex/auth.json 更新「${accountName}」`, 'success');
+      const message = `已用当前 ~/.codex/auth.json 更新「${accountName}」`;
+      setMessage(message, 'success');
+      showToast(message, 'success');
     }
   } catch (error) {
-    setMessage(typeof error === 'string' ? error : error.message, 'error');
+    const message = (typeof error === 'string' ? error : error?.message) || '更新认证文件失败';
+    setMessage(message, 'error');
+    showToast(message, 'error');
   } finally {
     button.disabled = false;
     button.textContent = '更新';
@@ -696,10 +737,14 @@ async function refreshUsage(options = {}) {
   }
   const { refreshPrices = true, refreshQuotas = true } = options;
   usageLoading = true;
-  refreshUsageButton.disabled = true;
-  setUsageMessage(refreshPrices ? '正在读取 OpenAI 官方用量与价格…' : '正在重新统计本地 token…');
+  const loadingMessage = refreshPrices
+    ? '正在读取 OpenAI 官方用量与价格…'
+    : '正在重新统计本地 Token…';
+  setUsageLoading(true, loadingMessage);
+  setUsageMessage(loadingMessage);
 
   try {
+    await waitForPaint();
     const statsPromise = invoke('get_usage_stats', {
       days: Number(usageRange.value),
       refreshPrices
@@ -727,7 +772,7 @@ async function refreshUsage(options = {}) {
     setUsageMessage(typeof error === 'string' ? error : error.message, 'error');
   } finally {
     usageLoading = false;
-    refreshUsageButton.disabled = false;
+    setUsageLoading(false);
   }
 }
 

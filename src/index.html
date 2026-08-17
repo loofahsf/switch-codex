@@ -11,7 +11,7 @@
       <aside class="sidebar" id="appSidebar">
         <div class="sidebar-top">
           <div class="traffic-lights" aria-hidden="true" data-tauri-drag-region><span></span><span></span><span></span></div>
-          <div class="brand"><img src="./assets/app-icon.svg" alt="" /><strong>Switch Codex</strong></div>
+          <div class="brand" data-tauri-drag-region><img src="./assets/app-icon.svg" alt="" data-tauri-drag-region /><strong data-tauri-drag-region>Switch Codex</strong></div>
           <nav class="view-tabs" aria-label="应用页面">
             <button type="button" class="view-tab is-active" data-view="accounts" aria-current="page" title="账号管理">
               <img src="./assets/user.svg" alt="" /><span>账号管理</span>
@@ -34,8 +34,8 @@
 
       <section class="workspace">
         <section class="view is-active" id="accountsView">
-          <header class="content-header">
-            <h1>账号管理</h1>
+          <header class="content-header" data-tauri-drag-region>
+            <h1 data-tauri-drag-region>账号管理</h1>
             <button type="button" class="primary-button add-account-button" id="toggleAccountForm"
               aria-expanded="false" aria-controls="accountFormContent" aria-label="展开新增账号表单">
               <img src="./assets/plus.svg" alt="" /><span>添加账号</span>
@@ -80,8 +80,8 @@
         </section>
 
         <section class="view usage-view" id="usageView">
-          <header class="content-header usage-header">
-            <h1>订阅配额与本地 Token</h1>
+          <header class="content-header usage-header" data-tauri-drag-region>
+            <h1 data-tauri-drag-region>订阅配额与本地 Token</h1>
             <div class="usage-controls">
               <label><span class="sr-only">统计范围</span>
                 <select id="usageRange">
@@ -92,6 +92,14 @@
               <button type="button" class="refresh-button" id="refreshUsage">刷新官方数据</button>
             </div>
           </header>
+
+          <div class="usage-loading" id="usageLoading" role="status" aria-live="polite" hidden>
+            <div class="usage-loading-card">
+              <span class="loading-spinner" aria-hidden="true"></span>
+              <strong id="usageLoadingText">正在查询用量数据…</strong>
+              <span>数据较多时可能需要一点时间</span>
+            </div>
+          </div>
 
           <div class="usage-scroll">
             <p class="usage-message" id="usageMessage" role="status"></p>
@@ -133,6 +141,8 @@
         </section>
       </section>
     </main>
+
+    <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
 
     <template id="accountItemTemplate">
       <article class="account-item">
