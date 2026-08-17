@@ -1,24 +1,37 @@
 {
   "name": "switch-codex",
-  "version": "0.0.0",
+  "version": "1.1.0",
   "description": "A macOS-first Tauri app for switching Codex auth.json profiles.",
   "author": "Switch Codex",
   "license": "MIT",
   "private": true,
-  "type": "commonjs",
+  "type": "module",
   "packageManager": "npm@10.9.3",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "dev:web": "vite --host 127.0.0.1 --port 1420",
+    "build:web": "tsc --noEmit && vite build",
     "build:mac:arm": "tauri build --target aarch64-apple-darwin",
     "build:mac:x64": "tauri build --target x86_64-apple-darwin",
     "build:win:x64": "tauri build --target x86_64-pc-windows-msvc",
-    "lint": "node --check src/renderer.js"
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ant-design/plots": "2.6.8",
+    "antd": "6.5.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.0.4",
+    "typescript": "7.0.2",
+    "vite": "8.2.0"
   }
 }

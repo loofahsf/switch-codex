@@ -52,32 +52,23 @@ jobs:
           const fs = require('fs');
 
           const ref = process.env.GITHUB_REF || '';
-          let tagName = '';
-          let version = '';
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const version = pkg.version;
+          if (!/^\d+\.\d+\.\d+$/.test(version)) {
+            throw new Error(`Invalid package version: ${version}`);
+          }
+          const tagName = `v${version}`;
 
           if (ref.startsWith('refs/tags/v')) {
-            tagName = ref.replace('refs/tags/', '');
-            const match = /^v(\d+\.\d+\.\d+)$/.exec(tagName);
-            if (!match) throw new Error(`Invalid tag format: ${tagName}`);
-            version = match[1];
+            const pushedTag = ref.replace('refs/tags/', '');
+            if (pushedTag !== tagName) {
+              throw new Error(`Tag ${pushedTag} does not match package version ${version}`);
+            }
           } else {
-            let latestTag = '';
-            try {
-              latestTag = execSync('git describe --tags --abbrev=0', { encoding: 'utf8' }).trim();
-            } catch (e) {
-              latestTag = 'v1.0.0';
+            const existingTag = execSync(`git tag --list ${tagName}`, { encoding: 'utf8' }).trim();
+            if (existingTag === tagName) {
+              throw new Error(`Tag ${tagName} already exists; update the project version before releasing again`);
             }
-
-            const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(latestTag);
-            if (match) {
-              const major = parseInt(match[1], 10);
-              const minor = parseInt(match[2], 10);
-              const patch = parseInt(match[3], 10) + 1;
-              version = `${major}.${minor}.${patch}`;
-            } else {
-              version = '1.0.1';
-            }
-            tagName = `v${version}`;
 
             execSync('git config user.name "github-actions[bot]"');
             execSync('git config user.email "github-actions[bot]@users.noreply.github.com"');
@@ -122,32 +113,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Set version in project files
-        shell: bash
-        run: |
-          node - <<'NODE'
-          const fs = require('fs');
-          const version = '${{ needs.version-and-tag.outputs.version }}';
-          if (!version) throw new Error('Version is missing from previous job!');
-
-          // package.json
-          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          pkg.version = version;
-          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-
-          // src-tauri/tauri.conf.json
-          const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-          conf.version = version;
-          fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
-
-          // src-tauri/Cargo.toml — replace version = "..." in [package] section only
-          let cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8');
-          cargo = cargo.replace(/^version = "[^"]*"/m, `version = "${version}"`);
-          fs.writeFileSync('src-tauri/Cargo.toml', cargo);
-
-          console.log(`Updated project files to version ${version}`);
-          NODE
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -220,4 +185,3 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
-

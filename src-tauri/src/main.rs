@@ -139,12 +139,28 @@ async fn get_usage_stats(
     days: u32,
     refresh_prices: Option<bool>,
 ) -> Result<usage::UsageStats, String> {
-    let data_dir = store
+    let store_data_dir = store
         .lock()
         .map_err(|_| "Store lock poisoned".to_string())?
         .data_dir()
         .to_path_buf();
-    usage::get_usage_stats(&data_dir, days, refresh_prices.unwrap_or(false)).await
+
+    // `tauri dev` watches src-tauri recursively. The debug data directory can
+    // live there, so writing the price cache into it would trigger a rebuild
+    // and restart the running app whenever the usage page refreshes prices.
+    let price_cache_dir = if cfg!(debug_assertions) {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
+            .join(".cache")
+            .join("switch-codex")
+    } else {
+        store_data_dir
+    };
+    std::fs::create_dir_all(&price_cache_dir)
+        .map_err(|error| format!("无法创建价格缓存目录: {error}"))?;
+
+    usage::get_usage_stats(&price_cache_dir, days, refresh_prices.unwrap_or(false)).await
 }
 
 #[tauri::command]

@@ -8,8 +8,9 @@
 
 ### 技术栈
 - **后端 / 核心逻辑**: Rust (Tauri v2) (`src-tauri/`)
-- **前端 UI**: Vanilla HTML / CSS / JavaScript (原生前端，无框架依赖) (`src/`)
-- **包管理器 / 运行环境**: Node.js >= 22 (配置见 `.nvmrc` 和 `package.json`)，包管理器为 `npm`
+- **前端 UI**: TypeScript + React + Ant Design + AntV (`src/`)
+- **前端构建**: Vite
+- **包管理器 / 运行环境**: Node.js >= 22.12 (配置见 `.nvmrc` 和 `package.json`)，包管理器为 `npm`
 
 ---
 
@@ -18,9 +19,12 @@
 ```text
 switch-codex/
 ├── src/                    # 前端代码目录
-│   ├── index.html          # 主界面 HTML 结构
-│   ├── renderer.js         # 前端交互与 Tauri IPC 命令调用逻辑
-│   └── styles.css          # UI 样式
+│   ├── index.html          # Vite HTML 入口
+│   ├── main.tsx            # React 应用入口
+│   ├── App.tsx             # 顶层状态与 Tauri IPC 交互
+│   ├── components/         # 可复用 UI 组件
+│   ├── views/              # 账号与用量页面
+│   └── styles.css          # 全局与组件适配样式
 ├── src-tauri/              # Rust 后端目录
 │   ├── src/
 │   │   ├── main.rs         # 应用入口、菜单/ macOS Status Item (托盘) 逻辑及 IPC 接口
@@ -56,7 +60,7 @@ npm run dev
 修改代码后，必须运行对应的检查命令确保代码无错误：
 
 ```bash
-# 前端 JS 语法检查
+# 前端 TypeScript 类型检查
 npm run lint
 
 # Rust 后端类型与编译检查 (在 src-tauri 目录下执行)
@@ -90,9 +94,9 @@ npm run build:win:x64
 
 ## 5. AI Agent 协作规范
 
-1. **保持轻量性**: 前端采用 Vanilla JS/CSS 设计，除非用户明确要求，否则请勿随意引入大型前端框架（如 React/Vue）或无关的 npm 包。
+1. **保持轻量性**: 前端基于 React、Ant Design 与 AntV，优先复用现有依赖与组件，避免引入无关 npm 包。
 2. **每次修改后进行代码验证**:
-   - 修改前端 `renderer.js` 后，执行 `npm run lint`。
+   - 修改前端 TypeScript/React 代码后，执行 `npm run lint`。
    - 修改 Rust 代码后，进入 `src-tauri` 目录执行 `cargo check` 或 `cargo clippy`。
 3. **跨平台兼容意识**: 本项目支持 macOS (arm64/x64) 与 Windows (x64) 构建。虽然当前为 macOS 优先（支持应用菜单和状态栏 Status Item），但底层 Rust 核心功能需保持平台无关性。
 4. **注释与文档保持**: 修改代码时保留现有清晰的注释说明，涉及底层协议或存储格式变动时同步更新 README.md 及相关文档。

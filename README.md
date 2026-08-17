@@ -2,6 +2,8 @@
 
 Switch Codex 是一款基于 Tauri 构建、以 macOS 优先的多 Codex `auth.json` 账号配置管理与快速切换桌面应用。
 
+前端使用 TypeScript、React、Ant Design、AntV 和 Vite，核心账号与文件操作由 Rust/Tauri 后端完成。
+
 ## 功能特性
 
 - 支持配置多个 Codex 账号名称。
@@ -50,7 +52,7 @@ Mac arm64 和 x64 安装包建议在 macOS 环境下构建。Windows x64 安装�
 ## GitHub Actions
 
 - 每次 Pull Request 都会自动运行 `npm ci` 和 `npm run lint`。
-- 推送代码至 `master` 分支（或手动触发 workflow）会自动检查最新的 Git Tag，自动递增补丁版本号（例如 `v1.0.8` -> `v1.0.9`），将新 Tag 推送至 GitHub，构建多平台安装包（macOS arm64, macOS x64, Windows x64），并将构建产物自动附加发布至 GitHub Releases。
+- 发布前先同步更新 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json` 中的版本号。推送代码至 `master` 或 `main` 分支（或手动触发 workflow）后，工作流会按项目版本创建对应的 Git Tag（例如 `1.1.0` 对应 `v1.1.0`），构建多平台安装包（macOS arm64、macOS x64、Windows x64），并将构建产物附加到 GitHub Releases。若对应 Tag 已存在，工作流会停止并要求先更新项目版本。
 
 ## 数据存储路径
 
@@ -72,4 +74,3 @@ data/
 ## 开源协议
 
 本项目采用 [MIT License](LICENSE) 开源协议。
-

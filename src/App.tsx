@@ -1,0 +1,360 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import AntdApp from 'antd/es/app';
+import Sidebar from './components/Sidebar';
+import AccountsView from './views/AccountsView';
+import UsageView from './views/UsageView';
+import { formatAccountId } from './format';
+import { confirm, getErrorMessage, invoke, listen } from './tauri';
+import type {
+  AccountItem,
+  AccountQuotas,
+  AccountsState,
+  ChosenFile,
+  InlineMessage,
+  UpdateAccountAuthResponse,
+  UsageStats,
+  ViewName
+} from './types';
+
+const emptyState: AccountsState = {
+  dataDir: '',
+  targetAuthPath: '',
+  activeAccountId: null,
+  accounts: []
+};
+
+const emptyMessage: InlineMessage = { text: '', type: 'neutral' };
+const sidebarStorageKey = 'switch-codex:sidebar-collapsed';
+
+interface RefreshUsageOptions {
+  refreshPrices?: boolean;
+  refreshQuotas?: boolean;
+  days?: number;
+}
+
+function waitForPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  });
+}
+
+function initialSidebarState(): boolean {
+  try {
+    return window.localStorage.getItem(sidebarStorageKey) === 'true';
+  } catch (error) {
+    console.warn('无法读取侧边栏状态:', error);
+    return false;
+  }
+}
+
+export default function App() {
+  const { message: toast } = AntdApp.useApp();
+  const [state, setState] = useState<AccountsState>(emptyState);
+  const [view, setView] = useState<ViewName>('accounts');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarState);
+  const [accountMessage, setAccountMessage] = useState<InlineMessage>(emptyMessage);
+  const [usageMessage, setUsageMessage] = useState<InlineMessage>(emptyMessage);
+  const [quotas, setQuotas] = useState<AccountQuotas | null>(null);
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+  const [usageRange, setUsageRange] = useState(30);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageLoadingText, setUsageLoadingText] = useState('正在查询用量数据…');
+
+  const viewRef = useRef<ViewName>('accounts');
+  const quotasRef = useRef<AccountQuotas | null>(null);
+  const usageRangeRef = useRef(30);
+  const usageLoadedRef = useRef(false);
+  const usageLoadingRef = useRef(false);
+  const quotaLoadingRef = useRef(false);
+
+  const updateQuotas = useCallback((nextQuotas: AccountQuotas | null) => {
+    quotasRef.current = nextQuotas;
+    setQuotas(nextQuotas);
+  }, []);
+
+  const refreshUsage = useCallback(
+    async ({
+      refreshPrices = true,
+      refreshQuotas = true,
+      days = usageRangeRef.current
+    }: RefreshUsageOptions = {}) => {
+      if (usageLoadingRef.current) {
+        return;
+      }
+
+      usageLoadingRef.current = true;
+      setUsageLoading(true);
+      const loadingText = refreshPrices
+        ? '正在读取 OpenAI 官方用量与价格…'
+        : '正在重新统计本地 Token…';
+      setUsageLoadingText(loadingText);
+      setUsageMessage({ text: loadingText, type: 'neutral' });
+
+      try {
+        await waitForPaint();
+        const statsPromise = invoke<UsageStats>('get_usage_stats', {
+          days,
+          refreshPrices
+        });
+        const quotasPromise: Promise<AccountQuotas | null> = refreshQuotas
+          ? invoke<AccountQuotas>('get_account_quotas')
+          : Promise.resolve(quotasRef.current);
+        const [nextStats, nextQuotas] = await Promise.all([statsPromise, quotasPromise]);
+
+        setUsageStats(nextStats);
+        if (nextQuotas) {
+          updateQuotas(nextQuotas);
+        }
+        usageLoadedRef.current = true;
+
+        const warning = nextStats.pricingSource.warning;
+        const unpriced = nextStats.summary.unpricedModelCount;
+        if (warning) {
+          setUsageMessage({ text: warning, type: 'error' });
+        } else if (unpriced > 0) {
+          setUsageMessage({
+            text: `统计完成；${unpriced} 个内部或未知模型没有公开价格，未计入估算。`,
+            type: 'neutral'
+          });
+        } else {
+          setUsageMessage({ text: '用量与价格已更新', type: 'success' });
+        }
+      } catch (error) {
+        setUsageMessage({ text: getErrorMessage(error, '查询用量失败'), type: 'error' });
+      } finally {
+        usageLoadingRef.current = false;
+        setUsageLoading(false);
+      }
+    },
+    [updateQuotas]
+  );
+
+  useEffect(() => {
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+
+    invoke<AccountsState>('list_accounts')
+      .then((nextState) => {
+        if (!disposed) setState(nextState);
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setAccountMessage({ text: getErrorMessage(error, '读取账号失败'), type: 'error' });
+        }
+      });
+
+    listen<AccountsState>('accounts-changed', (nextState) => {
+      if (disposed) return;
+      setState(nextState);
+      if (usageLoadedRef.current && viewRef.current === 'usage') {
+        void refreshUsage({ refreshPrices: false, refreshQuotas: true });
+      }
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    }).catch((error) => {
+      console.error('Failed to listen for accounts-changed:', error);
+    });
+
+    listen<string>('switch-error', (payload) => {
+      if (disposed) return;
+      const text = payload || '切换账号失败';
+      setAccountMessage({ text, type: 'error' });
+      void toast.error(text);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    }).catch((error) => {
+      console.error('Failed to listen for switch-error:', error);
+    });
+
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, [refreshUsage, toast]);
+
+  function changeSidebarCollapsed(collapsed: boolean) {
+    setSidebarCollapsed(collapsed);
+    try {
+      window.localStorage.setItem(sidebarStorageKey, String(collapsed));
+    } catch (error) {
+      console.warn('无法保存侧边栏状态:', error);
+    }
+  }
+
+  function changeView(nextView: ViewName) {
+    viewRef.current = nextView;
+    setView(nextView);
+    if (nextView === 'usage' && !usageLoadedRef.current) {
+      void refreshUsage();
+    }
+  }
+
+  async function chooseAuthFile(): Promise<ChosenFile | null> {
+    try {
+      const file = await invoke<ChosenFile | null>('choose_auth_file');
+      if (file) {
+        setAccountMessage({ text: `已选择 ${file.fileName}`, type: 'success' });
+      }
+      return file;
+    } catch (error) {
+      setAccountMessage({ text: getErrorMessage(error, '选择认证文件失败'), type: 'error' });
+      return null;
+    }
+  }
+
+  async function addAccount(name: string, authJson: string): Promise<boolean> {
+    if (!authJson) {
+      setAccountMessage({ text: '请选择 auth.json 文件', type: 'error' });
+      return false;
+    }
+    try {
+      setAccountMessage({ text: '正在保存账号...', type: 'neutral' });
+      const nextState = await invoke<AccountsState>('add_account', { name, authJson });
+      setState(nextState);
+      setAccountMessage({ text: '账号已添加', type: 'success' });
+      return true;
+    } catch (error) {
+      setAccountMessage({ text: getErrorMessage(error, '添加账号失败'), type: 'error' });
+      return false;
+    }
+  }
+
+  async function switchAccount(account: AccountItem) {
+    try {
+      const nextState = await invoke<AccountsState>('switch_account', { accountId: account.id });
+      setState(nextState);
+      const text = `已切换到「${account.name}」，~/.codex/auth.json 已更新`;
+      setAccountMessage({ text, type: 'success' });
+      void toast.success(text);
+    } catch (error) {
+      const text = getErrorMessage(error, '切换账号失败');
+      setAccountMessage({ text, type: 'error' });
+      void toast.error(text);
+    }
+  }
+
+  async function updateAccount(account: AccountItem) {
+    try {
+      let result = await invoke<UpdateAccountAuthResponse>('update_account_auth', {
+        accountId: account.id,
+        confirmMismatch: false
+      });
+
+      if (!result.updated) {
+        const confirmed = await confirm(
+          `当前 ~/.codex/auth.json 的 account_id（${formatAccountId(
+            result.currentAccountId
+          )}）与账号中保存的 account_id（${formatAccountId(
+            result.storedAccountId
+          )}）不一致。仍要覆盖吗？`,
+          { title: `确认更新「${account.name}」`, kind: 'warning' }
+        );
+        if (!confirmed) return;
+
+        result = await invoke<UpdateAccountAuthResponse>('update_account_auth', {
+          accountId: account.id,
+          confirmMismatch: true
+        });
+      }
+
+      if (result.updated && result.state) {
+        updateQuotas(null);
+        setState(result.state);
+        const text = `已用当前 ~/.codex/auth.json 更新「${account.name}」`;
+        setAccountMessage({ text, type: 'success' });
+        void toast.success(text);
+      }
+    } catch (error) {
+      const text = getErrorMessage(error, '更新认证文件失败');
+      setAccountMessage({ text, type: 'error' });
+      void toast.error(text);
+    }
+  }
+
+  async function removeAccount(account: AccountItem) {
+    const confirmed = await confirm('项目内保存的 auth.json 也会被删除，此操作无法撤销。', {
+      title: `删除账号「${account.name}」`,
+      kind: 'warning'
+    });
+    if (!confirmed) return;
+
+    try {
+      const nextState = await invoke<AccountsState>('remove_account', { accountId: account.id });
+      setState(nextState);
+      setAccountMessage({ text: '账号已删除', type: 'success' });
+    } catch (error) {
+      setAccountMessage({ text: getErrorMessage(error, '删除账号失败'), type: 'error' });
+    }
+  }
+
+  async function refreshAccountQuotas() {
+    if (quotaLoadingRef.current) return;
+    quotaLoadingRef.current = true;
+    setQuotaLoading(true);
+    try {
+      updateQuotas(await invoke<AccountQuotas>('get_account_quotas'));
+    } catch (error) {
+      const text = getErrorMessage(error, '额度查询失败');
+      setAccountMessage({ text, type: 'error' });
+      void toast.error(text);
+    } finally {
+      quotaLoadingRef.current = false;
+      setQuotaLoading(false);
+    }
+  }
+
+  function changeUsageRange(range: number) {
+    usageRangeRef.current = range;
+    setUsageRange(range);
+    void refreshUsage({ days: range, refreshPrices: false, refreshQuotas: false });
+  }
+
+  function openUrl(url: string) {
+    invoke<void>('open_url', { url }).catch((error) => {
+      void toast.error(getErrorMessage(error, '无法打开链接'));
+    });
+  }
+
+  return (
+    <main className={`app-shell${sidebarCollapsed ? ' is-sidebar-collapsed' : ''}`}>
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        view={view}
+        state={state}
+        onCollapsedChange={changeSidebarCollapsed}
+        onViewChange={changeView}
+      />
+      <section className="workspace">
+        <AccountsView
+          active={view === 'accounts'}
+          state={state}
+          quotas={quotas}
+          quotaLoading={quotaLoading}
+          inlineMessage={accountMessage}
+          onChooseFile={chooseAuthFile}
+          onAddAccount={addAccount}
+          onSwitchAccount={switchAccount}
+          onUpdateAccount={updateAccount}
+          onRemoveAccount={removeAccount}
+          onRefreshQuotas={refreshAccountQuotas}
+        />
+        <UsageView
+          active={view === 'usage'}
+          state={state}
+          quotas={quotas}
+          stats={usageStats}
+          range={usageRange}
+          loading={usageLoading}
+          loadingText={usageLoadingText}
+          inlineMessage={usageMessage}
+          onRangeChange={changeUsageRange}
+          onRefresh={() => void refreshUsage()}
+          onOpenUrl={openUrl}
+        />
+      </section>
+    </main>
+  );
+}
