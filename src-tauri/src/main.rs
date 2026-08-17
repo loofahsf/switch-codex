@@ -5,7 +5,7 @@ mod store;
 mod usage;
 
 use std::sync::Mutex;
-use store::{AccountsState, Store};
+use store::{AccountAuthUpdate, AccountsState, Store};
 #[cfg(target_os = "macos")]
 use tauri::tray::TrayIconBuilder;
 use tauri::{
@@ -94,6 +94,45 @@ fn switch_account(
     notify_state_changed(&app, &store)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAccountAuthResponse {
+    updated: bool,
+    stored_account_id: Option<String>,
+    current_account_id: Option<String>,
+    state: Option<AccountsState>,
+}
+
+#[tauri::command]
+fn update_account_auth(
+    app: AppHandle,
+    store: tauri::State<Mutex<Store>>,
+    account_id: String,
+    confirm_mismatch: bool,
+) -> Result<UpdateAccountAuthResponse, String> {
+    let AccountAuthUpdate {
+        updated,
+        stored_account_id,
+        current_account_id,
+    } = store
+        .lock()
+        .map_err(|_| "Store lock poisoned".to_string())?
+        .update_account_auth(&account_id, confirm_mismatch)?;
+
+    let state = if updated {
+        Some(notify_state_changed(&app, &store)?)
+    } else {
+        None
+    };
+
+    Ok(UpdateAccountAuthResponse {
+        updated,
+        stored_account_id,
+        current_account_id,
+        state,
+    })
+}
+
 #[tauri::command]
 async fn get_usage_stats(
     store: tauri::State<'_, Mutex<Store>>,
@@ -117,6 +156,11 @@ async fn get_account_quotas(
         .map_err(|_| "Store lock poisoned".to_string())?
         .list_accounts()?;
     Ok(usage::get_account_quotas(&state).await)
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|e| format!("无法打开链接: {e}"))
 }
 
 #[tauri::command]
@@ -508,9 +552,11 @@ fn main() {
             add_account,
             remove_account,
             switch_account,
+            update_account_auth,
             choose_auth_file,
             get_usage_stats,
             get_account_quotas,
+            open_url,
         ])
         .build(context)
         .expect("error while building tauri application")
