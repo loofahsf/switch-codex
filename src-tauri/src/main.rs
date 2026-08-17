@@ -5,7 +5,7 @@ mod store;
 mod usage;
 
 use std::sync::Mutex;
-use store::{AccountsState, Store};
+use store::{AccountAuthUpdate, AccountsState, Store};
 #[cfg(target_os = "macos")]
 use tauri::tray::TrayIconBuilder;
 use tauri::{
@@ -92,6 +92,45 @@ fn switch_account(
         .map_err(|_| "Store lock poisoned".to_string())?
         .switch_account(&account_id)?;
     notify_state_changed(&app, &store)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAccountAuthResponse {
+    updated: bool,
+    stored_account_id: Option<String>,
+    current_account_id: Option<String>,
+    state: Option<AccountsState>,
+}
+
+#[tauri::command]
+fn update_account_auth(
+    app: AppHandle,
+    store: tauri::State<Mutex<Store>>,
+    account_id: String,
+    confirm_mismatch: bool,
+) -> Result<UpdateAccountAuthResponse, String> {
+    let AccountAuthUpdate {
+        updated,
+        stored_account_id,
+        current_account_id,
+    } = store
+        .lock()
+        .map_err(|_| "Store lock poisoned".to_string())?
+        .update_account_auth(&account_id, confirm_mismatch)?;
+
+    let state = if updated {
+        Some(notify_state_changed(&app, &store)?)
+    } else {
+        None
+    };
+
+    Ok(UpdateAccountAuthResponse {
+        updated,
+        stored_account_id,
+        current_account_id,
+        state,
+    })
 }
 
 #[tauri::command]
@@ -513,6 +552,7 @@ fn main() {
             add_account,
             remove_account,
             switch_account,
+            update_account_auth,
             choose_auth_file,
             get_usage_stats,
             get_account_quotas,

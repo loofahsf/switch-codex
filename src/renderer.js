@@ -1,12 +1,17 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+document.documentElement.classList.add('is-tauri');
+
 const accountForm = document.querySelector('#accountForm');
 const accountNameInput = document.querySelector('#accountName');
 const chooseAuthFileButton = document.querySelector('#chooseAuthFile');
 const selectedAuthFile = document.querySelector('#selectedAuthFile');
 const formMessage = document.querySelector('#formMessage');
 const activeStatus = document.querySelector('#activeStatus');
+const activeStatusValue = activeStatus.querySelector('strong');
+const appShell = document.querySelector('.app-shell');
+const toggleSidebarButton = document.querySelector('#toggleSidebar');
 const accountCount = document.querySelector('#accountCount');
 const accountList = document.querySelector('#accountList');
 const contentGrid = document.querySelector('.content-grid');
@@ -44,12 +49,38 @@ let usageLoaded = false;
 let usageLoading = false;
 let currentQuotas = null;
 
+const sidebarStorageKey = 'switch-codex:sidebar-collapsed';
+
+function setSidebarCollapsed(collapsed, persist = true) {
+  appShell.classList.toggle('is-sidebar-collapsed', collapsed);
+  toggleSidebarButton.setAttribute('aria-expanded', String(!collapsed));
+  toggleSidebarButton.setAttribute('aria-label', collapsed ? '展开侧边栏' : '收起侧边栏');
+  toggleSidebarButton.title = collapsed ? '展开侧边栏' : '收起侧边栏';
+
+  if (persist) {
+    try {
+      window.localStorage.setItem(sidebarStorageKey, String(collapsed));
+    } catch (error) {
+      console.warn('无法保存侧边栏状态:', error);
+    }
+  }
+}
+
+function restoreSidebarState() {
+  try {
+    setSidebarCollapsed(window.localStorage.getItem(sidebarStorageKey) === 'true', false);
+  } catch (error) {
+    console.warn('无法读取侧边栏状态:', error);
+    setSidebarCollapsed(false, false);
+  }
+}
+
 function setAccountFormCollapsed(collapsed) {
   contentGrid.classList.toggle('is-form-collapsed', collapsed);
   accountForm.classList.toggle('is-collapsed', collapsed);
   toggleAccountFormButton.setAttribute('aria-expanded', String(!collapsed));
   toggleAccountFormButton.setAttribute('aria-label', collapsed ? '展开新增账号表单' : '收起新增账号表单');
-  toggleAccountFormButton.textContent = collapsed ? '展开' : '收起';
+  toggleAccountFormButton.querySelector('span').textContent = collapsed ? '添加账号' : '收起表单';
 }
 
 function setMessage(message, type = 'neutral') {
@@ -70,7 +101,7 @@ function render(state) {
   accountCount.textContent = `${state.accounts.length} 个账号`;
 
   const activeAccount = state.accounts.find((account) => account.id === state.activeAccountId);
-  activeStatus.textContent = activeAccount ? `当前生效：${activeAccount.name}` : '未配置账号';
+  activeStatusValue.textContent = activeAccount ? activeAccount.name : '未配置账号';
   activeStatus.classList.toggle('is-active', Boolean(activeAccount));
 
   if (state.accounts.length === 0) {
@@ -92,6 +123,9 @@ function render(state) {
     switchButton.disabled = account.isActive;
     switchButton.addEventListener('click', () => switchAccount(account.id));
 
+    const updateButton = item.querySelector('.update-button');
+    updateButton.addEventListener('click', () => updateAccountAuth(account.id, account.name, updateButton));
+
     item.querySelector('.danger-button').addEventListener('click', () => removeAccount(account.id, account.name));
 
     if (currentQuotas) {
@@ -111,7 +145,6 @@ async function loadAccounts() {
   try {
     const state = await invoke('list_accounts');
     render(state);
-    loadAccountQuotas();
   } catch (error) {
     setMessage(typeof error === 'string' ? error : error.message, 'error');
   }
@@ -163,6 +196,54 @@ async function switchAccount(accountId) {
     setMessage(account ? `已切换到 ${account.name}` : '已切换账号', 'success');
   } catch (error) {
     setMessage(typeof error === 'string' ? error : error.message, 'error');
+  }
+}
+
+function formatAccountId(accountId) {
+  if (!accountId) {
+    return '缺失';
+  }
+  if (accountId.length <= 14) {
+    return accountId;
+  }
+  return `${accountId.slice(0, 7)}…${accountId.slice(-5)}`;
+}
+
+async function updateAccountAuth(accountId, accountName, button) {
+  button.disabled = true;
+  button.textContent = '更新中...';
+
+  try {
+    let result = await invoke('update_account_auth', {
+      accountId,
+      confirmMismatch: false
+    });
+
+    if (!result.updated) {
+      const confirmed = await window.__TAURI__.dialog.confirm(
+        `当前 ~/.codex/auth.json 的 account_id（${formatAccountId(result.currentAccountId)}）与账号中保存的 account_id（${formatAccountId(result.storedAccountId)}）不一致。仍要覆盖吗？`,
+        { title: `确认更新「${accountName}」`, kind: 'warning' }
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      result = await invoke('update_account_auth', {
+        accountId,
+        confirmMismatch: true
+      });
+    }
+
+    if (result.updated && result.state) {
+      currentQuotas = null;
+      render(result.state);
+      setMessage(`已用当前 ~/.codex/auth.json 更新「${accountName}」`, 'success');
+    }
+  } catch (error) {
+    setMessage(typeof error === 'string' ? error : error.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = '更新';
   }
 }
 
@@ -296,7 +377,7 @@ function renderAccountRowQuota(cardEl, quota) {
   }
 
   if (!quota) {
-    if (statusEl) statusEl.textContent = '等待加载额度...';
+    if (statusEl) statusEl.textContent = '点击“刷新额度”后查询';
     return;
   }
 
@@ -361,7 +442,7 @@ function renderAccountRowQuota(cardEl, quota) {
 async function loadAccountQuotas() {
   if (refreshAccountQuotasButton) {
     refreshAccountQuotasButton.disabled = true;
-    refreshAccountQuotasButton.textContent = '查询中...';
+    refreshAccountQuotasButton.querySelector('span').textContent = '查询中...';
   }
 
   document.querySelectorAll('.account-quota-status').forEach((el) => {
@@ -382,7 +463,7 @@ async function loadAccountQuotas() {
   } finally {
     if (refreshAccountQuotasButton) {
       refreshAccountQuotasButton.disabled = false;
-      refreshAccountQuotasButton.textContent = '刷新额度';
+      refreshAccountQuotasButton.querySelector('span').textContent = '刷新额度';
     }
   }
 }
@@ -548,7 +629,7 @@ function renderModelRows(models) {
   if (!models?.length) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
-    cell.colSpan = 10;
+    cell.colSpan = 5;
     cell.className = 'table-empty';
     cell.textContent = '暂无 token 记录';
     row.append(cell);
@@ -562,12 +643,7 @@ function renderModelRows(models) {
       model.model,
       formatNumber(model.inputTokens),
       formatNumber(model.cachedInputTokens),
-      formatNumber(model.outputTokens),
       formatNumber(model.totalTokens),
-      formatNumber(model.turnCount),
-      model.averageTokensPerTurn == null ? '—' : formatNumber(Math.round(model.averageTokensPerTurn)),
-      formatDuration(model.averageTimeToFirstTokenMs),
-      formatDuration(model.averageDurationMs),
       model.estimatedCostUsd == null ? '暂无官方价格' : formatUsd(model.estimatedCostUsd)
     ];
     values.forEach((value, index) => {
@@ -576,7 +652,7 @@ function renderModelRows(models) {
       if (index === 0) {
         cell.className = 'model-name';
       }
-      if (index === 9 && model.estimatedCostUsd == null) {
+      if (index === 4 && model.estimatedCostUsd == null) {
         cell.className = 'unpriced';
       }
       row.append(cell);
@@ -678,6 +754,9 @@ accountForm.addEventListener('submit', addAccount);
 toggleAccountFormButton.addEventListener('click', () => {
   setAccountFormCollapsed(!accountForm.classList.contains('is-collapsed'));
 });
+toggleSidebarButton.addEventListener('click', () => {
+  setSidebarCollapsed(!appShell.classList.contains('is-sidebar-collapsed'));
+});
 refreshUsageButton.addEventListener('click', () => refreshUsage());
 if (refreshAccountQuotasButton) {
   refreshAccountQuotasButton.addEventListener('click', loadAccountQuotas);
@@ -717,4 +796,5 @@ async function init() {
   });
 }
 
+restoreSidebarState();
 init();

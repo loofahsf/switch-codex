@@ -42,6 +42,14 @@ pub struct AccountsState {
     pub accounts: Vec<AccountItem>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountAuthUpdate {
+    pub updated: bool,
+    pub stored_account_id: Option<String>,
+    pub current_account_id: Option<String>,
+}
+
 // ── Store ──────────────────────────────────────────────────────────────────
 
 pub struct Store {
@@ -202,6 +210,52 @@ impl Store {
         self.write_index(&index)
     }
 
+    pub fn update_account_auth(
+        &self,
+        account_id: &str,
+        confirm_mismatch: bool,
+    ) -> Result<AccountAuthUpdate, String> {
+        let mut index = self.read_index()?;
+        let account_index = index
+            .accounts
+            .iter()
+            .position(|account| account.id == account_id)
+            .ok_or_else(|| "账号不存在".to_string())?;
+
+        let stored_path = self.account_auth_path(account_id);
+        let stored_auth = std::fs::read_to_string(&stored_path)
+            .map_err(|e| format!("无法读取账号中保存的 auth.json: {e}"))?;
+        let stored_normalized = normalize_auth_json(&stored_auth)?;
+
+        let current_path = Self::codex_auth_path();
+        let current_auth = std::fs::read_to_string(&current_path)
+            .map_err(|e| format!("无法读取当前 ~/.codex/auth.json: {e}"))?;
+        let current_normalized = normalize_auth_json(&current_auth)?;
+
+        let stored_account_id = extract_account_id(&stored_normalized)?;
+        let current_account_id = extract_account_id(&current_normalized)?;
+        let account_ids_match = account_ids_match(&stored_account_id, &current_account_id);
+
+        if !account_ids_match && !confirm_mismatch {
+            return Ok(AccountAuthUpdate {
+                updated: false,
+                stored_account_id,
+                current_account_id,
+            });
+        }
+
+        write_file_atomic(&stored_path, &current_normalized, 0o600)
+            .map_err(|e| format!("更新账号 auth.json 失败: {e}"))?;
+        index.accounts[account_index].updated_at = chrono::Utc::now().to_rfc3339();
+        self.write_index(&index)?;
+
+        Ok(AccountAuthUpdate {
+            updated: true,
+            stored_account_id,
+            current_account_id,
+        })
+    }
+
     fn copy_account_to_codex(&self, account: &Account) -> Result<(), String> {
         let source = self.account_auth_path(&account.id);
         let target = Self::codex_auth_path();
@@ -262,6 +316,21 @@ pub fn normalize_auth_json(auth_json: &str) -> Result<String, String> {
         "{}\n",
         serde_json::to_string_pretty(&parsed).unwrap()
     ))
+}
+
+fn extract_account_id(auth_json: &str) -> Result<Option<String>, String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(auth_json).map_err(|_| "auth.json 内容不是合法 JSON".to_string())?;
+    Ok(parsed
+        .pointer("/tokens/account_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned))
+}
+
+fn account_ids_match(stored: &Option<String>, current: &Option<String>) -> bool {
+    stored.is_some() && stored.as_deref() == current.as_deref()
 }
 
 /// Atomic write: temp-file + fsync + chmod + rename.
@@ -352,4 +421,29 @@ pub fn write_file_atomic(path: &Path, contents: &str, _mode: u32) -> std::io::Re
         let _ = std::fs::remove_file(&temp_path);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{account_ids_match, extract_account_id};
+
+    #[test]
+    fn extracts_trimmed_account_id() {
+        let auth = r#"{"tokens":{"account_id":"  account-123  "}}"#;
+        assert_eq!(
+            extract_account_id(auth).unwrap().as_deref(),
+            Some("account-123")
+        );
+    }
+
+    #[test]
+    fn only_present_equal_account_ids_match() {
+        let account_id = Some("account-123".to_string());
+        assert!(account_ids_match(&account_id, &account_id));
+        assert!(!account_ids_match(
+            &account_id,
+            &Some("account-456".to_string())
+        ));
+        assert!(!account_ids_match(&None, &None));
+    }
 }

@@ -13,11 +13,17 @@
         "label": "main",
         "title": "Switch Codex",
         "url": "index.html",
-        "width": 980,
-        "height": 680,
+        "width": 960,
+        "height": 640,
         "minWidth": 780,
         "minHeight": 560,
-        "backgroundColor": "#f6f5f1"
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 16
+        },
+        "backgroundColor": "#f4f4f5"
       }
     ],
     "security": {
