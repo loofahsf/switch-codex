@@ -145,6 +145,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .usage-loading-card > span:last-child { color: var(--subtle); font-size: 10px; }
 .loading-spinner { width: 24px; height: 24px; border: 3px solid #ccfbf1; border-top-color: var(--accent); border-radius: 50%; animation: spin 700ms linear infinite; }
 .usage-scroll { display: flex; flex: 1; flex-direction: column; gap: 16px; min-height: 0; padding: 20px; overflow: auto; }
+.usage-scroll > * { flex: 0 0 auto; }
 .usage-message { color: var(--muted); font-size: 10px; }
 .usage-message:empty { display: none; }
 .usage-message[data-type="success"] { color: var(--accent); }
@@ -181,7 +182,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .daily-bar-track { display: flex; align-items: flex-end; flex: 1; width: 100%; min-width: 5px; }
 .daily-bar { width: 100%; min-height: 3px; background: var(--accent); border-radius: 2px 2px 0 0; }
 .daily-bar-label { color: var(--subtle); font-size: 8px; writing-mode: vertical-rl; }
-.model-table-wrap { min-width: 0; overflow: auto; border-radius: 8px; }
+.model-table-wrap { min-width: 0; overflow-x: auto; border-radius: 8px; }
 .model-table { width: 100%; min-width: 390px; border-collapse: collapse; table-layout: fixed; }
 .model-table th, .model-table td { padding: 8px 10px; border-bottom: 1px solid var(--bg); color: var(--muted); font-size: 11px; text-align: right; white-space: nowrap; }
 .model-table th { padding-block: 6px; background: var(--bg); font-size: 10px; font-weight: 700; }
@@ -189,7 +190,8 @@ h1, h2, h3, h4, p { margin: 0; }
 .model-table tbody tr:last-child td { border-bottom: 0; }
 .model-table .model-name { font-weight: 600; }
 .table-empty { padding: 32px !important; color: var(--subtle) !important; text-align: center !important; }
-.pricing-panel { display: flex; align-items: center; gap: 8px; color: var(--subtle); font-size: 9px; }
+.usage-footer { display: grid; gap: 6px; padding-bottom: 4px; }
+.pricing-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--subtle); font-size: 9px; }
 .pricing-panel a { color: var(--accent); text-decoration: none; }
 .usage-footnote { color: var(--subtle); font-size: 9px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
