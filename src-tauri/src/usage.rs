@@ -312,6 +312,39 @@ pub async fn get_account_quotas(state: &AccountsState) -> AccountQuotas {
     }
 }
 
+pub async fn get_account_quota(
+    state: &AccountsState,
+    account_id: &str,
+) -> Result<AccountQuotas, String> {
+    let account = state
+        .accounts
+        .iter()
+        .find(|account| account.id == account_id)
+        .ok_or_else(|| "账号不存在".to_string())?;
+    let auth_path = if account.is_active {
+        PathBuf::from(&state.target_auth_path)
+    } else {
+        PathBuf::from(&account.auth_path)
+    };
+
+    let quota = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()
+    {
+        Ok(client) => fetch_account_quota(&client, &account.id, &account.name, &auth_path).await,
+        Err(error) => quota_error(
+            account.id.clone(),
+            account.name.clone(),
+            &format!("无法创建网络客户端: {error}"),
+        ),
+    };
+
+    Ok(AccountQuotas {
+        source_url: CODEX_USAGE_URL.to_string(),
+        accounts: vec![quota],
+    })
+}
+
 async fn fetch_account_quota(
     client: &reqwest::Client,
     account_id: &str,

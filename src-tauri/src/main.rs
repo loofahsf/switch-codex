@@ -175,6 +175,18 @@ async fn get_account_quotas(
 }
 
 #[tauri::command]
+async fn get_account_quota(
+    store: tauri::State<'_, Mutex<Store>>,
+    account_id: String,
+) -> Result<usage::AccountQuotas, String> {
+    let state = store
+        .lock()
+        .map_err(|_| "Store lock poisoned".to_string())?
+        .list_accounts()?;
+    usage::get_account_quota(&state, &account_id).await
+}
+
+#[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| format!("无法打开链接: {e}"))
 }
@@ -572,6 +584,7 @@ fn main() {
             choose_auth_file,
             get_usage_stats,
             get_account_quotas,
+            get_account_quota,
             open_url,
         ])
         .build(context)

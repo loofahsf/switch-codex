@@ -64,7 +64,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .content-header { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; min-height: 49px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line); -webkit-app-region: drag; user-select: none; }
 .content-header h1 { font-size: 16px; line-height: 20px; }
 .content-header button, .content-header input, .content-header select, .content-header label, .content-header .ant-select { -webkit-app-region: no-drag; }
-.primary-button, .file-button, .switch-button, .update-button, .danger-button, .refresh-button, .refresh-quota-btn { border: 0; border-radius: 6px; box-shadow: none; font-weight: 600; cursor: pointer; }
+.primary-button, .file-button, .switch-button, .refresh-account-quota-button, .sync-auth-button, .danger-button, .refresh-button, .refresh-quota-btn { border: 0; border-radius: 6px; box-shadow: none; font-weight: 600; cursor: pointer; }
 .primary-button, .switch-button, .refresh-button { color: white; background: var(--accent); }
 .primary-button:hover, .switch-button:hover, .refresh-button:hover { background: var(--accent-hover); }
 .add-account-button { display: flex; align-items: center; gap: 6px; height: 27px; min-height: 27px; padding: 5px 10px; font-size: 12px; }
@@ -112,10 +112,11 @@ h1, h2, h3, h4, p { margin: 0; }
 .account-actions { display: flex; align-items: center; gap: 6px; }
 .switch-button { min-width: 48px; height: 24px; min-height: 24px; padding: 4px 10px; border-radius: 4px; font-size: 11px; }
 .switch-button:disabled { color: var(--subtle); background: var(--bg); cursor: default; }
-.update-button, .danger-button { width: 22px; height: 22px; padding: 0; overflow: hidden; background-repeat: no-repeat; background-position: center; color: transparent; font-size: 0; }
-.update-button { background-color: var(--bg) !important; background-image: url("./assets/refresh.svg") !important; }
+.refresh-account-quota-button, .sync-auth-button, .danger-button { width: 22px; height: 22px; padding: 0; overflow: hidden; background-repeat: no-repeat; background-position: center; color: transparent; font-size: 0; }
+.refresh-account-quota-button { background-color: var(--bg) !important; background-image: url("./assets/refresh.svg") !important; }
+.sync-auth-button { background-color: var(--accent-soft) !important; background-image: url("./assets/sync-auth.svg") !important; }
 .danger-button { background-color: var(--danger-soft) !important; background-image: url("./assets/trash.svg") !important; }
-.update-button:hover, .danger-button:hover { filter: brightness(.97); }
+.refresh-account-quota-button:hover, .sync-auth-button:hover, .danger-button:hover { filter: brightness(.97); }
 .account-quota-box { display: grid; gap: 7px; }
 .account-quota-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .account-quota-item { display: grid; gap: 4px; min-width: 0; }

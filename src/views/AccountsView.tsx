@@ -17,6 +17,7 @@ interface AccountsViewProps {
   state: AccountsState;
   quotas: AccountQuotas | null;
   quotaLoading: boolean;
+  refreshingQuotaAccountId: string | null;
   inlineMessage: InlineMessage;
   onChooseFile: () => Promise<ChosenFile | null>;
   onAddAccount: (name: string, authJson: string) => Promise<boolean>;
@@ -24,6 +25,7 @@ interface AccountsViewProps {
   onUpdateAccount: (account: AccountItem) => Promise<void>;
   onRemoveAccount: (account: AccountItem) => Promise<void>;
   onRefreshQuotas: () => Promise<void>;
+  onRefreshAccountQuota: (account: AccountItem) => Promise<void>;
 }
 
 export default function AccountsView({
@@ -31,20 +33,22 @@ export default function AccountsView({
   state,
   quotas,
   quotaLoading,
+  refreshingQuotaAccountId,
   inlineMessage,
   onChooseFile,
   onAddAccount,
   onSwitchAccount,
   onUpdateAccount,
   onRemoveAccount,
-  onRefreshQuotas
+  onRefreshQuotas,
+  onRefreshAccountQuota
 }: AccountsViewProps) {
   const [formCollapsed, setFormCollapsed] = useState(true);
   const [name, setName] = useState('');
   const [selectedAuth, setSelectedAuth] = useState<ChosenFile | null>(null);
   const [saving, setSaving] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
-  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
 
   async function chooseAuthFile() {
     const file = await onChooseFile();
@@ -80,11 +84,11 @@ export default function AccountsView({
   }
 
   async function updateAccount(account: AccountItem) {
-    setUpdatingId(account.id);
+    setSyncingId(account.id);
     try {
       await onUpdateAccount(account);
     } finally {
-      setUpdatingId(null);
+      setSyncingId(null);
     }
   }
 
@@ -188,10 +192,19 @@ export default function AccountsView({
                         </Button>
                         <Button
                           type="text"
-                          className="update-button"
+                          className="refresh-account-quota-button"
+                          title="刷新该账号的限额信息"
+                          aria-label="刷新该账号的限额信息"
+                          disabled={quotaLoading || refreshingQuotaAccountId !== null}
+                          loading={refreshingQuotaAccountId === account.id}
+                          onClick={() => onRefreshAccountQuota(account)}
+                        />
+                        <Button
+                          type="text"
+                          className="sync-auth-button"
                           title="用当前 ~/.codex/auth.json 覆盖保存的文件"
-                          aria-label="更新认证文件"
-                          disabled={updatingId === account.id}
+                          aria-label="反向同步认证文件"
+                          disabled={syncingId === account.id}
                           onClick={() => updateAccount(account)}
                         />
                         <Button
@@ -202,7 +215,10 @@ export default function AccountsView({
                         />
                       </div>
                     </div>
-                    <AccountRowQuota quota={quota} loading={quotaLoading} />
+                    <AccountRowQuota
+                      quota={quota}
+                      loading={quotaLoading || refreshingQuotaAccountId === account.id}
+                    />
                   </article>
                 );
               })

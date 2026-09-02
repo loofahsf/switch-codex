@@ -56,6 +56,7 @@ export default function App() {
   const [usageMessage, setUsageMessage] = useState<InlineMessage>(emptyMessage);
   const [quotas, setQuotas] = useState<AccountQuotas | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(false);
+  const [refreshingQuotaAccountId, setRefreshingQuotaAccountId] = useState<string | null>(null);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [usageRange, setUsageRange] = useState(30);
   const [usageLoading, setUsageLoading] = useState(false);
@@ -67,6 +68,7 @@ export default function App() {
   const usageLoadedRef = useRef(false);
   const usageLoadingRef = useRef(false);
   const quotaLoadingRef = useRef(false);
+  const refreshingQuotaAccountIdRef = useRef<string | null>(null);
 
   const updateQuotas = useCallback((nextQuotas: AccountQuotas | null) => {
     quotasRef.current = nextQuotas;
@@ -261,7 +263,6 @@ export default function App() {
       }
 
       if (result.updated && result.state) {
-        updateQuotas(null);
         setState(result.state);
         const text = `已用当前 ~/.codex/auth.json 更新「${account.name}」`;
         setAccountMessage({ text, type: 'success' });
@@ -291,7 +292,7 @@ export default function App() {
   }
 
   async function refreshAccountQuotas() {
-    if (quotaLoadingRef.current) return;
+    if (quotaLoadingRef.current || refreshingQuotaAccountIdRef.current) return;
     quotaLoadingRef.current = true;
     setQuotaLoading(true);
     try {
@@ -303,6 +304,35 @@ export default function App() {
     } finally {
       quotaLoadingRef.current = false;
       setQuotaLoading(false);
+    }
+  }
+
+  async function refreshAccountQuota(account: AccountItem) {
+    if (quotaLoadingRef.current || refreshingQuotaAccountIdRef.current) return;
+    refreshingQuotaAccountIdRef.current = account.id;
+    setRefreshingQuotaAccountId(account.id);
+    try {
+      const result = await invoke<AccountQuotas>('get_account_quota', { accountId: account.id });
+      const quota = result.accounts[0];
+      if (!quota) return;
+
+      const previous = quotasRef.current;
+      const accounts = previous?.accounts ?? [];
+      const existingIndex = accounts.findIndex((item) => item.accountId === quota.accountId);
+      const nextAccounts = [...accounts];
+      if (existingIndex >= 0) {
+        nextAccounts[existingIndex] = quota;
+      } else {
+        nextAccounts.push(quota);
+      }
+      updateQuotas({ sourceUrl: result.sourceUrl, accounts: nextAccounts });
+    } catch (error) {
+      const text = getErrorMessage(error, '额度查询失败');
+      setAccountMessage({ text, type: 'error' });
+      void toast.error(text);
+    } finally {
+      refreshingQuotaAccountIdRef.current = null;
+      setRefreshingQuotaAccountId(null);
     }
   }
 
@@ -333,6 +363,7 @@ export default function App() {
           state={state}
           quotas={quotas}
           quotaLoading={quotaLoading}
+          refreshingQuotaAccountId={refreshingQuotaAccountId}
           inlineMessage={accountMessage}
           onChooseFile={chooseAuthFile}
           onAddAccount={addAccount}
@@ -340,6 +371,7 @@ export default function App() {
           onUpdateAccount={updateAccount}
           onRemoveAccount={removeAccount}
           onRefreshQuotas={refreshAccountQuotas}
+          onRefreshAccountQuota={refreshAccountQuota}
         />
         <UsageView
           active={view === 'usage'}
