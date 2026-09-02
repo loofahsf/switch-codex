@@ -3515,7 +3515,7 @@ dependencies = [
 
 [[package]]
 name = "switch-codex"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "chrono",
  "dirs 5.0.1",

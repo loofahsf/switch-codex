@@ -100,3 +100,4 @@ npm run build:win:x64
    - 修改 Rust 代码后，进入 `src-tauri` 目录执行 `cargo check` 或 `cargo clippy`。
 3. **跨平台兼容意识**: 本项目支持 macOS (arm64/x64) 与 Windows (x64) 构建。虽然当前为 macOS 优先（支持应用菜单和状态栏 Status Item），但底层 Rust 核心功能需保持平台无关性。
 4. **注释与文档保持**: 修改代码时保留现有清晰的注释说明，涉及底层协议或存储格式变动时同步更新 README.md 及相关文档。
+5. **发布版本管理（强制）**: 因为日常直接在 `main` 分支开发，每次提交任何会触发 Release 的代码前，必须将应用版本升级为一个尚未发布的有效语义化版本（`MAJOR.MINOR.PATCH`），不得复用已有 Git tag 对应的版本。`npm run lint` 会强制校验这一要求；请在提交前执行该命令。以下文件中的项目版本必须保持完全一致：`package.json`、`package-lock.json` 顶层 `version` 与 `packages[\"\"].version`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 中 `switch-codex` 包的 `version`、`src-tauri/tauri.conf.json`。提交前应核对 `git tag --list \"v*\"`，确认目标 `v<version>` 尚不存在。
