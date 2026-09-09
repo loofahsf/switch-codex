@@ -244,3 +244,13 @@ h1, h2, h3, h4, p { margin: 0; }
 .settings-result { padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
 .settings-result-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .settings-result-title strong { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+
+.settings-time-picker { width: 100%; min-height: 34px; }
+.settings-time-picker .ant-picker-input > input { min-height: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+.settings-result { width: 100%; color: var(--ink); font: inherit; text-align: left; background: var(--panel); cursor: pointer; }
+.settings-result:hover { border-color: var(--accent); background: var(--accent-soft); }
+.settings-result:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-result > .settings-help, .settings-result > .settings-error { display: block; }
+.call-detail-content { min-width: 0; }
+.call-detail-content h3 { margin: 16px 0 8px; font-size: 13px; }
+.call-detail-content pre { margin: 0; padding: 12px; border-radius: 6px; background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 12px; line-height: 1.7; }

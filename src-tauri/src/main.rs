@@ -54,6 +54,13 @@ fn get_settings(scheduler: tauri::State<Arc<scheduler::Scheduler>>) -> scheduler
 }
 
 #[tauri::command]
+async fn detect_codex_cli_path() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(scheduler::detect_codex_cli_path)
+        .await
+        .map_err(|_| "自动查找 CLI 任务中断".into())
+}
+
+#[tauri::command]
 async fn save_settings(
     app: AppHandle,
     scheduler: tauri::State<'_, Arc<scheduler::Scheduler>>,
@@ -611,6 +618,7 @@ fn main() {
         .on_window_event(handle_window_event)
         .invoke_handler(tauri::generate_handler![
             get_settings,
+            detect_codex_cli_path,
             save_settings,
             get_scheduled_run_status,
             list_accounts,

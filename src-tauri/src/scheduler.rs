@@ -20,6 +20,7 @@ pub const PROMPT: &str = "What model are you?";
 const POLL_SECONDS: u64 = 60;
 const GRACE_SECONDS: i64 = 300;
 const ACCOUNT_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,9 +33,9 @@ pub struct Settings {
 impl Settings {
     fn validate(&mut self) -> Result<(), String> {
         if let Some(time) = &self.time {
-            if time.len() != 5 || NaiveTime::parse_from_str(time, "%H:%M").is_err() {
-                return Err("执行时间必须为 HH:mm".into());
-            }
+            let parsed =
+                parse_schedule_time(time).ok_or("执行时间必须为 HH:mm:ss，秒数为 00–59")?;
+            self.time = Some(parsed.format("%H:%M:%S").to_string());
         }
         if self.enabled && self.time.is_none() {
             return Err("启用前请选择执行时间".into());
@@ -46,6 +47,22 @@ impl Settings {
             .filter(|p| !p.is_empty());
         Ok(())
     }
+}
+
+fn parse_schedule_time(value: &str) -> Option<NaiveTime> {
+    // HH:mm is accepted only for compatibility and normalized on load/save.
+    if !value.is_ascii() {
+        return None;
+    }
+    let format = match value.len() {
+        5 => "%H:%M",
+        8 if value.as_bytes()[6..].iter().all(u8::is_ascii_digit) && &value[6..] < "60" => {
+            "%H:%M:%S"
+        }
+        _ => return None,
+    };
+    let parsed = NaiveTime::parse_from_str(value, format).ok()?;
+    (parsed.format(format).to_string() == value).then_some(parsed)
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -67,6 +84,12 @@ pub struct AccountResult {
     started_at: Option<String>,
     finished_at: Option<String>,
     message: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    // None means a legacy record without captured details; an empty string
+    // means this invocation has not received a completed assistant message.
+    #[serde(default)]
+    response: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -132,7 +155,7 @@ fn next_run<T: TimeZone>(
     if !settings.enabled {
         return None;
     }
-    let time = NaiveTime::parse_from_str(settings.time.as_deref()?, "%H:%M").ok()?;
+    let time = parse_schedule_time(settings.time.as_deref()?)?;
     for days in 0..370 {
         let date = now
             .date_naive()
@@ -395,6 +418,8 @@ impl Scheduler {
                     started_at: None,
                     finished_at: None,
                     message: None,
+                    prompt: None,
+                    response: Some(String::new()),
                 })
                 .collect(),
         });
@@ -429,6 +454,7 @@ impl Scheduler {
         index: usize,
         status: AccountStatus,
         message: Option<String>,
+        response: Option<String>,
     ) {
         let mut state = self.state.lock().unwrap();
         if self.stopping.load(Ordering::SeqCst) {
@@ -447,6 +473,9 @@ impl Scheduler {
             }
             account.status = status;
             account.message = message;
+            if let Some(response) = response {
+                account.response = Some(response);
+            }
         }
         if let Err(error) = self.persist(&state.saved) {
             state.error = Some(error);
@@ -468,14 +497,26 @@ impl Scheduler {
         // No scheduling deadline checks in this loop: a claimed queue always
         // drains serially, including accounts waiting more than five minutes.
         drain_queue(&snapshots, &self.stopping, |index, account| {
-            self.update_account(app, index, AccountStatus::Running, None);
+            self.update_account(app, index, AccountStatus::Running, None, None);
             let result = cli
                 .as_ref()
                 .map_err(Clone::clone)
-                .and_then(|cli| self.run_account(app, cli, account));
+                .and_then(|cli| self.run_account(app, cli, account, index));
             match result {
-                Ok(warning) => self.update_account(app, index, AccountStatus::Success, warning),
-                Err(error) => self.update_account(app, index, AccountStatus::Failed, Some(error)),
+                Ok(outcome) => self.update_account(
+                    app,
+                    index,
+                    if outcome.success {
+                        AccountStatus::Success
+                    } else {
+                        AccountStatus::Failed
+                    },
+                    outcome.message,
+                    Some(outcome.response),
+                ),
+                Err(error) => {
+                    self.update_account(app, index, AccountStatus::Failed, Some(error), None)
+                }
             }
         });
         let _ = fs::remove_dir_all(&self.runtime);
@@ -512,7 +553,8 @@ impl Scheduler {
         app: &AppHandle,
         cli: &Path,
         account: &AccountSnapshot,
-    ) -> Result<Option<String>, String> {
+        index: usize,
+    ) -> Result<CallOutcome, String> {
         let original = account.auth.as_ref().map_err(Clone::clone)?;
         let normalized = normalize_auth_json(original)?;
         let directory = self.runtime.join(uuid::Uuid::new_v4().to_string());
@@ -523,7 +565,24 @@ impl Scheduler {
         private_directory(&work)?;
         write_file_atomic(&home.join("auth.json"), &normalized, 0o600)
             .map_err(|_| "无法准备临时认证文件")?;
-        let mut command = invocation(cli, &home, &work);
+        let prompt = PROMPT.to_owned();
+        let mut command = invocation(cli, &home, &work, &prompt);
+        {
+            let mut state = self.state.lock().unwrap();
+            if self.stopping.load(Ordering::SeqCst) {
+                return Err("任务已中断".into());
+            }
+            if let Some(record) = state
+                .saved
+                .last_run
+                .as_mut()
+                .and_then(|batch| batch.accounts.get_mut(index))
+            {
+                record.prompt = Some(prompt);
+            }
+            self.persist(&state.saved)?;
+        }
+        self.emit(app);
         let result = self.process.run(&mut command, ACCOUNT_TIMEOUT);
         // Refresh can succeed even when the model request fails. Always attempt
         // write-back before cleanup, without logging or serializing the tokens.
@@ -540,13 +599,21 @@ impl Scheduler {
                     .persist_refreshed_auth(&account.id, original, &refreshed)
             })
             .err();
-        match result.and_then(|output| parse_completion(&output)) {
-            Ok(()) => Ok(warning),
-            Err(error) => Err(match warning {
+        let response = result.as_ref().map(parse_response).unwrap_or_default();
+        let completion = result.and_then(|output| parse_completion(&output));
+        let success = completion.is_ok();
+        let message = match completion {
+            Ok(()) => warning,
+            Err(error) => Some(match warning {
                 Some(warning) => format!("{error}；{warning}"),
                 None => error,
             }),
-        }
+        };
+        Ok(CallOutcome {
+            success,
+            response,
+            message,
+        })
     }
 
     pub fn shutdown(&self) {
@@ -605,7 +672,7 @@ impl Drop for Cleanup {
     }
 }
 
-fn invocation(cli: &Path, home: &Path, work: &Path) -> Command {
+fn invocation(cli: &Path, home: &Path, work: &Path, prompt: &str) -> Command {
     let mut command = cli_command(cli);
     command
         .args([
@@ -633,7 +700,7 @@ fn invocation(cli: &Path, home: &Path, work: &Path) -> Command {
             "-c",
             "features.shell_tool=false",
         ])
-        .arg(PROMPT)
+        .arg(prompt)
         .current_dir(work)
         .env("CODEX_HOME", home)
         .env_remove("CODEX_API_KEY")
@@ -671,9 +738,17 @@ fn cli_command(path: &Path) -> Command {
     command
 }
 
+struct CallOutcome {
+    success: bool,
+    response: String,
+    message: Option<String>,
+}
+
+#[derive(Default)]
 struct ProcessOutput {
     success: bool,
     stdout: Vec<u8>,
+    error: Option<String>,
 }
 #[derive(Default)]
 struct ProcessRunner {
@@ -724,7 +799,7 @@ impl ProcessRunner {
         thread::spawn(move || {
             let mut output = Vec::new();
             let result = stdout
-                .take(1024 * 1024 + 1)
+                .take(MAX_OUTPUT_BYTES as u64 + 1)
                 .read_to_end(&mut output)
                 .map(|_| output);
             let _ = sender.send(result);
@@ -758,17 +833,33 @@ impl ProcessRunner {
         };
         #[cfg(windows)]
         drop(_job);
-        let success = result?;
+        let success = result.as_ref().copied().unwrap_or(false);
+        let mut error = result.err();
         let output = receiver
             .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| "无法读取 CLI 输出")?
-            .map_err(|_| "无法读取 CLI 输出")?;
-        if output.len() > 1024 * 1024 {
-            return Err("CLI 输出超出限制".into());
+            .map_err(|_| "无法读取 CLI 输出")
+            .and_then(|output| output.map_err(|_| "无法读取 CLI 输出"));
+        let mut output = match output {
+            Ok(output) => output,
+            Err(read_error) => {
+                error = Some(match error {
+                    Some(error) => format!("{error}；{read_error}"),
+                    None => read_error.into(),
+                });
+                Vec::new()
+            }
+        };
+        if output.len() > MAX_OUTPUT_BYTES {
+            error = Some(match error {
+                Some(error) => format!("{error}；CLI 输出超出限制"),
+                None => "CLI 输出超出限制".into(),
+            });
+            output.truncate(MAX_OUTPUT_BYTES);
         }
         Ok(ProcessOutput {
             success,
             stdout: output,
+            error,
         })
     }
 }
@@ -831,6 +922,9 @@ impl Drop for WindowsJob {
 }
 
 fn parse_completion(output: &ProcessOutput) -> Result<(), String> {
+    if let Some(error) = &output.error {
+        return Err(error.clone());
+    }
     let mut completed = false;
     let mut failed = false;
     for line in output.stdout.split(|b| *b == b'\n') {
@@ -849,6 +943,41 @@ fn parse_completion(output: &ProcessOutput) -> Result<(), String> {
     }
 }
 
+fn parse_response(output: &ProcessOutput) -> String {
+    let mut messages = Vec::new();
+    let mut ids = std::collections::HashSet::new();
+    for line in output.stdout.split(|b| *b == b'\n') {
+        let Ok(event) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        if event.get("type").and_then(|value| value.as_str()) != Some("item.completed") {
+            continue;
+        }
+        let Some(item) = event.get("item") else {
+            continue;
+        };
+        if item.get("type").and_then(|value| value.as_str()) != Some("agent_message") {
+            continue;
+        }
+        let Some(text) = item.get("text").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if let Some(id) = item.get("id").and_then(|value| value.as_str()) {
+            if !ids.insert(id.to_owned()) {
+                continue;
+            }
+        }
+        messages.push(text.to_owned());
+    }
+    messages.join("\n\n")
+}
+
+pub fn detect_codex_cli_path() -> Option<String> {
+    resolve_cli(None)
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
 fn resolve_cli(configured: Option<&str>) -> Result<PathBuf, String> {
     if let Some(path) = configured {
         let path = PathBuf::from(path);
@@ -864,7 +993,6 @@ fn resolve_cli(configured: Option<&str>) -> Result<PathBuf, String> {
         }
         return Err("CLI 路径必须是存在的可执行文件绝对路径".into());
     }
-    let executable = if cfg!(windows) { "codex.exe" } else { "codex" };
     let mut directories: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
@@ -888,10 +1016,16 @@ fn resolve_cli(configured: Option<&str>) -> Result<PathBuf, String> {
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
     ]);
-    for directory in &directories {
+    find_cli_in_directories(&directories)
+        .ok_or_else(|| "未找到 Codex CLI，请安装 CLI 或填写可执行文件绝对路径".into())
+}
+
+fn find_cli_in_directories(directories: &[PathBuf]) -> Option<PathBuf> {
+    let executable = if cfg!(windows) { "codex.exe" } else { "codex" };
+    for directory in directories {
         let candidate = directory.join(executable);
         if candidate.is_file() {
-            return Ok(candidate);
+            return Some(candidate);
         }
         #[cfg(windows)]
         {
@@ -902,18 +1036,21 @@ fn resolve_cli(configured: Option<&str>) -> Result<PathBuf, String> {
                     .join(package)
                     .join("vendor/x86_64-pc-windows-msvc/codex/codex.exe");
                 if candidate.is_file() {
-                    return Ok(candidate);
+                    return Some(candidate);
                 }
             }
         }
     }
-    Err("未找到 Codex CLI，请安装 CLI 或填写可执行文件绝对路径".into())
+    None
 }
 
 fn validate_cli(path: &Path) -> Result<(), String> {
     let mut command = cli_command(path);
     command.args(["exec", "--help"]);
     let output = ProcessRunner::default().run(&mut command, Duration::from_secs(10))?;
+    if let Some(error) = output.error {
+        return Err(error);
+    }
     let help = String::from_utf8_lossy(&output.stdout);
     if !output.success
         || ![
@@ -1042,7 +1179,9 @@ mod tests {
         }
         .validate()
         .is_err());
-        for time in ["9:00", "25:00", "12:60", "09:00:00", "abcde"] {
+        for time in [
+            "9:00", "25:00", "12:60", "09:00:60", "09:00:99", "09:00:1", "abcde", "12:3你",
+        ] {
             assert!(Settings {
                 time: Some(time.into()),
                 ..settings()
@@ -1176,6 +1315,8 @@ mod tests {
                     started_at: None,
                     finished_at: None,
                     message: None,
+                    prompt: None,
+                    response: None,
                 })
                 .collect(),
             });
@@ -1248,7 +1389,8 @@ mod tests {
             assert_eq!(
                 parse_completion(&ProcessOutput {
                     success,
-                    stdout: text.as_bytes().to_vec()
+                    stdout: text.as_bytes().to_vec(),
+                    error: None,
                 })
                 .is_ok(),
                 expected
@@ -1289,7 +1431,10 @@ exit 7
         private_directory(&work).unwrap();
         fs::write(home.join("auth.json"), auth("a", "old")).unwrap();
         let output = ProcessRunner::default()
-            .run(&mut invocation(&cli, &home, &work), Duration::from_secs(2))
+            .run(
+                &mut invocation(&cli, &home, &work, PROMPT),
+                Duration::from_secs(2),
+            )
             .unwrap();
         assert!(!output.success);
         assert!(fs::read_to_string(home.join("auth.json"))
@@ -1353,7 +1498,10 @@ esac
             thread::sleep(Duration::from_millis(10));
         }
         runner.stop();
-        assert!(task.join().unwrap().is_err());
+        assert_eq!(
+            task.join().unwrap().unwrap().error.as_deref(),
+            Some("任务已中断")
+        );
         assert!(runner
             .run(&mut Command::new("/usr/bin/true"), Duration::from_secs(1))
             .is_err());
@@ -1368,5 +1516,163 @@ esac
         assert!(resolve_cli(Some("relative/codex")).is_err());
         let cli = fake_cli(&root.0, "echo '--model --sandbox --json --ephemeral --skip-git-repo-check --ignore-user-config'");
         validate_cli(&cli).unwrap();
+    }
+
+    #[test]
+    fn legacy_settings_and_task_details_migrate_without_inventing_content() {
+        let root = temp();
+        let legacy = serde_json::json!({
+            "settings": {"enabled": true, "time": "09:12", "cliPath": null},
+            "lastRunDate": "2026-09-08",
+            "lastRun": {"startedAt":"2026-09-08T09:12:00+08:00", "finishedAt":"2026-09-08T09:12:01+08:00",
+                "accounts":[{"accountId":"a", "accountName":"Old", "status":"success", "startedAt":null, "finishedAt":null, "message":null}]}
+        });
+        fs::write(root.0.join("settings.json"), legacy.to_string()).unwrap();
+        let scheduler = Scheduler::new(&root.0, root.0.join("runtime")).unwrap();
+        assert_eq!(scheduler.settings().time.as_deref(), Some("09:12:00"));
+        let saved: SavedState =
+            serde_json::from_str(&fs::read_to_string(root.0.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved.settings.time.as_deref(), Some("09:12:00"));
+        let account = &saved.last_run.unwrap().accounts[0];
+        assert!(account.prompt.is_none());
+        assert!(account.response.is_none());
+    }
+
+    #[test]
+    fn seconds_are_preserved_with_minute_polling_and_across_midnight() {
+        for time in ["00:00:00", "09:12:34", "23:59:59"] {
+            let mut value = Settings {
+                time: Some(time.into()),
+                ..settings()
+            };
+            value.validate().unwrap();
+            assert_eq!(value.time.as_deref(), Some(time));
+        }
+        let value = Settings {
+            time: Some("09:00:45".into()),
+            ..settings()
+        };
+        let next = next_run(&value, at(9, 0, 44), None).unwrap();
+        assert_eq!(next, at(9, 0, 45));
+        assert_eq!(due(at(9, 0, 44).timestamp(), next.timestamp()), Due::Wait);
+        assert_eq!(due(at(9, 1, 10).timestamp(), next.timestamp()), Due::Start);
+        assert_eq!(due(at(9, 5, 45).timestamp(), next.timestamp()), Due::Start);
+        assert_eq!(due(at(9, 5, 46).timestamp(), next.timestamp()), Due::Missed);
+        let midnight = Settings {
+            time: Some("00:00:05".into()),
+            ..settings()
+        };
+        let next = next_run(&midnight, at(23, 59, 59), None).unwrap();
+        assert_eq!(
+            next.date_naive(),
+            at(23, 59, 59).date_naive().succ_opt().unwrap()
+        );
+        assert_eq!(next.time(), NaiveTime::from_hms_opt(0, 0, 5).unwrap());
+        assert_eq!(POLL_SECONDS, 60);
+    }
+
+    #[test]
+    fn only_completed_assistant_messages_are_retained_and_round_trip() {
+        let output = ProcessOutput { success: true, stdout: concat!(
+            "{\"type\":\"item.updated\",\"item\":{\"id\":\"a\",\"type\":\"agent_message\",\"text\":\"partial\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"a\",\"type\":\"agent_message\",\"text\":\"第一行\\nSecond line\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"a\",\"type\":\"agent_message\",\"text\":\"duplicate\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"reasoning\",\"text\":\"private reasoning\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\",\"text\":\"command log\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"b\",\"type\":\"agent_message\",\"text\":\"<b>literal text</b>\"}}\n",
+            "{\"type\":\"turn.completed\"}\n"
+        ).as_bytes().to_vec(), error: None };
+        assert!(parse_completion(&output).is_ok());
+        let response = parse_response(&output);
+        assert_eq!(response, "第一行\nSecond line\n\n<b>literal text</b>");
+        let record = AccountResult {
+            account_id: "a".into(),
+            account_name: "Test".into(),
+            status: AccountStatus::Success,
+            started_at: None,
+            finished_at: None,
+            message: None,
+            prompt: Some(PROMPT.into()),
+            response: Some(response.clone()),
+        };
+        let restored: AccountResult =
+            serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
+        assert_eq!(restored.prompt.as_deref(), Some(PROMPT));
+        assert_eq!(restored.response.as_deref(), Some(response.as_str()));
+    }
+
+    #[test]
+    fn cli_path_discovery_is_read_only_and_custom_paths_take_precedence() {
+        let root = temp();
+        assert!(find_cli_in_directories(std::slice::from_ref(&root.0)).is_none());
+        let name = if cfg!(windows) { "codex.exe" } else { "codex" };
+        let auto = root.0.join(name);
+        fs::write(&auto, "not an executable; discovery must not run this file").unwrap();
+        assert_eq!(
+            find_cli_in_directories(std::slice::from_ref(&root.0)),
+            Some(auto)
+        );
+        let custom = root.0.join(if cfg!(windows) {
+            "custom-codex.exe"
+        } else {
+            "custom-codex"
+        });
+        fs::write(&custom, "custom").unwrap();
+        assert_eq!(resolve_cli(Some(custom.to_str().unwrap())).unwrap(), custom);
+        assert_eq!(fs::read_dir(&root.0).unwrap().count(), 2);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_and_timed_out_cli_preserve_completed_responses() {
+        let root = temp();
+        let cli = fake_cli(
+            &root.0,
+            r#"
+printf '%s\n' '{"type":"item.completed","item":{"id":"reply","type":"agent_message","text":"Already received\n完整响应"}}'
+case "$1" in
+ timeout) exec /bin/sleep 30 ;;
+ failure) printf '%s\n' '{"type":"turn.failed"}'; exit 8 ;;
+ *) printf '%s\n' '{"type":"turn.completed"}' ;;
+esac
+"#,
+        );
+        let runner = ProcessRunner::default();
+        for mode in ["success", "failure", "timeout"] {
+            let output = runner
+                .run(Command::new(&cli).arg(mode), Duration::from_secs(1))
+                .unwrap();
+            assert_eq!(parse_response(&output), "Already received\n完整响应");
+            assert_eq!(parse_completion(&output).is_ok(), mode == "success");
+            if mode == "timeout" {
+                assert_eq!(output.error.as_deref(), Some("Codex CLI 调用超时"));
+            }
+            assert!(runner.child.lock().unwrap().is_none());
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn oversized_output_keeps_received_messages_and_reports_limit() {
+        let root = temp();
+        let cli = fake_cli(
+            &root.0,
+            r#"
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Received before limit"}}'
+/bin/dd if=/dev/zero bs=1048576 count=2 2>/dev/null
+"#,
+        );
+        let output = ProcessRunner::default()
+            .run(&mut Command::new(cli), Duration::from_secs(3))
+            .unwrap();
+        assert!(output
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("CLI 输出超出限制"));
+        assert!(output.stdout.len() <= MAX_OUTPUT_BYTES);
+        assert_eq!(parse_response(&output), "Received before limit");
+        assert!(parse_completion(&output).is_err());
     }
 }

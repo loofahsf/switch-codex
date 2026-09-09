@@ -1,6 +1,6 @@
 {
   "name": "switch-codex",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A macOS-first Tauri app for switching Codex auth.json profiles.",
   "author": "Switch Codex",
   "license": "MIT",
@@ -25,7 +25,8 @@
     "@ant-design/plots": "2.6.8",
     "antd": "6.5.3",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "dayjs": "1.11.22"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

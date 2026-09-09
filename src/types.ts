@@ -12,6 +12,8 @@ export interface ScheduledAccountResult {
   startedAt: string | null;
   finishedAt: string | null;
   message: string | null;
+  prompt: string | null;
+  response: string | null;
 }
 export interface ScheduledRunStatus {
   nextRunAt: string | null;
