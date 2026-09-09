@@ -114,11 +114,28 @@ jobs:
         run: npm run ${{ matrix.script }}
 
       - name: Upload package
+        id: upload-package
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: switch-codex-${{ matrix.name }}
+          path: release/*
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Wait before retry upload
+        if: steps.upload-package.outcome == 'failure'
+        shell: bash
+        run: sleep 5
+
+      - name: Retry upload package
+        if: steps.upload-package.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
           name: switch-codex-${{ matrix.name }}
           path: release/*
           if-no-files-found: error
+          overwrite: true
 
   publish:
     needs: build
@@ -154,6 +171,21 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download all packages
+        id: download-packages
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          pattern: switch-codex-*
+          path: release
+          merge-multiple: true
+
+      - name: Wait before retry download
+        if: steps.download-packages.outcome == 'failure'
+        shell: bash
+        run: sleep 5
+
+      - name: Retry download all packages
+        if: steps.download-packages.outcome == 'failure'
         uses: actions/download-artifact@v7
         with:
           pattern: switch-codex-*

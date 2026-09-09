@@ -1,14 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { pkg, versionFiles, wailsVersion } from './version-files.mjs';
+const readText = (path) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+
 const errors = [];
 const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
 if (lock.version !== pkg.version || lock.packages[''].version !== pkg.version) errors.push('package-lock.json version is stale');
 for (const [path, expected] of versionFiles()) {
-  try { if (readFileSync(path, 'utf8') !== expected) errors.push(`${path} is stale; run npm run version:sync`); }
+  try { if (readText(path) !== expected.replace(/\r\n/g, '\n')) errors.push(`${path} is stale; run npm run version:sync`); }
   catch { errors.push(`${path} is missing; run npm run version:sync`); }
 }
-if (pkg.dependencies['@wailsio/runtime'] !== wailsVersion.slice(1) || !readFileSync('go.mod', 'utf8').includes(`github.com/wailsapp/wails/v3 ${wailsVersion}\n`)) errors.push('Wails Go, CLI and frontend runtime versions must be pinned together');
+const goMod = readText('go.mod');
+if (pkg.dependencies['@wailsio/runtime'] !== wailsVersion.slice(1) || !goMod.includes(`github.com/wailsapp/wails/v3 ${wailsVersion}\n`)) errors.push('Wails Go, CLI and frontend runtime versions must be pinned together');
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const tag = `v${pkg.version}`;
 const tagRef = (process.env.GITHUB_REF || '').startsWith('refs/tags/') ? process.env.GITHUB_REF.slice(10) : null;
