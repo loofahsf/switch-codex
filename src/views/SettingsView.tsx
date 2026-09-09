@@ -6,7 +6,7 @@ import Tag from 'antd/es/tag';
 import TimePicker from 'antd/es/time-picker';
 import Modal from 'antd/es/modal';
 import dayjs from 'dayjs';
-import { getErrorMessage, invoke, listen } from '../tauri';
+import { getErrorMessage, invoke, listen } from '../platform';
 import type { ScheduledAccountResult, ScheduledAccountStatus, ScheduledRunStatus, Settings } from '../types';
 
 const defaultSettings: Settings = { enabled: false, time: null, cliPath: null };
@@ -121,8 +121,8 @@ export default function SettingsView({ active }: { active: boolean }) {
 
   return (
     <section className={`view${active ? ' is-active' : ''}`}>
-      <header className="content-header" data-tauri-drag-region="true">
-        <h1 data-tauri-drag-region="true">设置</h1>
+      <header className="content-header" data-window-drag-region="true">
+        <h1 data-window-drag-region="true">设置</h1>
       </header>
       <div className="content-grid settings-content" aria-busy={loading}>
         <form className="panel settings-panel" onSubmit={(event) => void save(event)}>

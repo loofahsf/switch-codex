@@ -26,12 +26,12 @@ h1, h2, h3, h4, p { margin: 0; }
 .app-shell.is-sidebar-collapsed { grid-template-columns: 76px minmax(0, 1fr); }
 .sidebar { position: relative; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; background: var(--panel); border-right: 1px solid var(--line); }
 .sidebar-top { display: grid; gap: 20px; }
-.traffic-lights { display: flex; gap: 8px; padding: 16px 0 0 16px; -webkit-app-region: drag; }
+.traffic-lights { display: flex; gap: 8px; padding: 16px 0 0 16px; --wails-draggable: drag; }
 .traffic-lights span { width: 12px; height: 12px; border-radius: 50%; background: #ff5f56; }
 .traffic-lights span:nth-child(2) { background: #ffbd2e; }
 .traffic-lights span:nth-child(3) { background: #27c93f; }
-.is-tauri .traffic-lights span { visibility: hidden; }
-.brand { display: flex; align-items: center; gap: 8px; padding: 0 16px; -webkit-app-region: drag; user-select: none; }
+.is-desktop .traffic-lights span { visibility: hidden; }
+.brand { display: flex; align-items: center; gap: 8px; padding: 0 16px; --wails-draggable: drag; user-select: none; }
 .brand img { width: 24px; height: 24px; -webkit-user-drag: none; }
 .brand strong { font-size: 14px; line-height: 17px; }
 .view-tabs { display: grid; gap: 2px; padding: 0 8px; }
@@ -61,9 +61,9 @@ h1, h2, h3, h4, p { margin: 0; }
 .workspace, .view { min-width: 0; min-height: 0; height: 100%; }
 .view { display: none; }
 .view.is-active { display: flex; flex-direction: column; }
-.content-header { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; min-height: 49px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line); -webkit-app-region: drag; user-select: none; }
+.content-header { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; min-height: 49px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line); --wails-draggable: drag; user-select: none; }
 .content-header h1 { font-size: 16px; line-height: 20px; }
-.content-header button, .content-header input, .content-header select, .content-header label, .content-header .ant-select { -webkit-app-region: no-drag; }
+.content-header button, .content-header input, .content-header select, .content-header label, .content-header .ant-select { --wails-draggable: no-drag; }
 .primary-button, .file-button, .switch-button, .refresh-account-quota-button, .sync-auth-button, .danger-button, .refresh-button, .refresh-quota-btn { border: 0; border-radius: 6px; box-shadow: none; font-weight: 600; cursor: pointer; }
 .primary-button, .switch-button, .refresh-button { color: white; background: var(--accent); }
 .primary-button:hover, .switch-button:hover, .refresh-button:hover { background: var(--accent-hover); }

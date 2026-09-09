@@ -1,48 +1,21 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-
-const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
-const packageLock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
-const tauriConfig = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-const cargoToml = readFileSync('src-tauri/Cargo.toml', 'utf8');
-const cargoLock = readFileSync('src-tauri/Cargo.lock', 'utf8');
-
-const cargoVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-const cargoLockVersion = cargoLock.match(
-  /\[\[package\]\]\nname = "switch-codex"\nversion = "([^"]+)"/,
-)?.[1];
-const expectedVersion = packageJson.version;
-const versions = {
-  'package-lock.json': packageLock.version,
-  'package-lock.json packages[""]': packageLock.packages?.['']?.version,
-  'src-tauri/Cargo.toml': cargoVersion,
-  'src-tauri/Cargo.lock': cargoLockVersion,
-  'src-tauri/tauri.conf.json': tauriConfig.version,
-};
+import { pkg, versionFiles, wailsVersion } from './version-files.mjs';
 const errors = [];
-
-if (!/^\d+\.\d+\.\d+$/.test(expectedVersion)) {
-  errors.push(`package.json version must be MAJOR.MINOR.PATCH, received: ${expectedVersion}`);
+const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+if (lock.version !== pkg.version || lock.packages[''].version !== pkg.version) errors.push('package-lock.json version is stale');
+for (const [path, expected] of versionFiles()) {
+  try { if (readFileSync(path, 'utf8') !== expected) errors.push(`${path} is stale; run npm run version:sync`); }
+  catch { errors.push(`${path} is missing; run npm run version:sync`); }
 }
-
-for (const [file, version] of Object.entries(versions)) {
-  if (version !== expectedVersion) {
-    errors.push(`${file} version must match package.json (${expectedVersion}), received: ${version}`);
-  }
-}
-
-const tagName = `v${expectedVersion}`;
-const existingTag = execFileSync('git', ['tag', '--list', tagName], {
-  encoding: 'utf8',
-}).trim();
-
-if (existingTag === tagName) {
-  errors.push(`Git tag ${tagName} already exists; bump the version before committing release-triggering code.`);
-}
-
-if (errors.length > 0) {
-  console.error('Release version check failed:\n- ' + errors.join('\n- '));
-  process.exit(1);
-}
-
-console.log(`Release version check passed: ${tagName} is new and all version files match.`);
+if (pkg.dependencies['@wailsio/runtime'] !== wailsVersion.slice(1) || !readFileSync('go.mod', 'utf8').includes(`github.com/wailsapp/wails/v3 ${wailsVersion}\n`)) errors.push('Wails Go, CLI and frontend runtime versions must be pinned together');
+const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+const tag = `v${pkg.version}`;
+const tagRef = (process.env.GITHUB_REF || '').startsWith('refs/tags/') ? process.env.GITHUB_REF.slice(10) : null;
+const taggedBuild = process.argv.includes('--tagged') || process.env.SWITCH_CODEX_TAGGED_BUILD === '1' || tagRef !== null;
+if (tagRef && tagRef !== tag) errors.push(`Tag ${tagRef} does not match ${tag}`);
+if (git('tag', '--list', tag) === tag) {
+  if (!taggedBuild || git('rev-parse', `${tag}^{commit}`) !== git('rev-parse', 'HEAD')) errors.push(`Tag ${tag} already exists; use a new version (only a build of that exact tag may reuse it)`);
+} else if (taggedBuild) errors.push(`Tagged build requested but ${tag} is missing`);
+if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
+console.log(`Version check passed: ${tag}${taggedBuild ? ' (tagged build)' : ' (unpublished)'}`);

@@ -94,8 +94,8 @@ export default function AccountsView({
 
   return (
     <section className={`view${active ? ' is-active' : ''}`}>
-      <header className="content-header" data-tauri-drag-region="true">
-        <h1 data-tauri-drag-region="true">账号管理</h1>
+      <header className="content-header" data-window-drag-region="true">
+        <h1 data-window-drag-region="true">账号管理</h1>
         <Button
           type="primary"
           className="primary-button add-account-button"

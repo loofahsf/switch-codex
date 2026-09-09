@@ -3,7 +3,7 @@ import { formatNumber, formatUsd } from '../format';
 import type { DailyUsageItem } from '../types';
 
 export default function DailyTokenChart({ items }: { items: DailyUsageItem[] }) {
-  const data = items.slice(-14).map((item) => ({
+  const data = items.map((item) => ({
     ...item,
     dateLabel: item.date.slice(5).replace('-', '/')
   }));

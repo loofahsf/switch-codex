@@ -12,178 +12,153 @@ on:
 permissions:
   contents: write
 
-jobs:
-  lint:
-    runs-on: ubuntu-latest
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
+env:
+  WAILS_VERSION: v3.0.0-beta.18
+  SWITCH_CODEX_TAGGED_BUILD: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: npm
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+          cache: true
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run lint
-        run: npm run lint
+      - name: Install pinned Wails CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
+        env:
+          GOBIN: ${{ github.workspace }}/.cache/tools
 
-  version-and-tag:
-    needs: lint
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.bump.outputs.version }}
-      tag_name: ${{ steps.bump.outputs.tag_name }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Determine and create tag
-        id: bump
-        shell: bash
+      - name: Run required checks
         run: |
-          node - <<'NODE'
-          const { execSync } = require('child_process');
-          const fs = require('fs');
-
-          const ref = process.env.GITHUB_REF || '';
-          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          const version = pkg.version;
-          if (!/^\d+\.\d+\.\d+$/.test(version)) {
-            throw new Error(`Invalid package version: ${version}`);
-          }
-          const tagName = `v${version}`;
-
-          if (ref.startsWith('refs/tags/v')) {
-            const pushedTag = ref.replace('refs/tags/', '');
-            if (pushedTag !== tagName) {
-              throw new Error(`Tag ${pushedTag} does not match package version ${version}`);
-            }
-          } else {
-            const existingTag = execSync(`git tag --list ${tagName}`, { encoding: 'utf8' }).trim();
-            if (existingTag === tagName) {
-              throw new Error(`Tag ${tagName} already exists; update the project version before releasing again`);
-            }
-
-            execSync('git config user.name "github-actions[bot]"');
-            execSync('git config user.email "github-actions[bot]@users.noreply.github.com"');
-
-            console.log(`Creating and pushing tag ${tagName}...`);
-            execSync(`git tag ${tagName}`);
-            execSync(`git push origin ${tagName}`);
-          }
-
-          console.log(`Target version: ${version}, tag: ${tagName}`);
-
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag_name=${tagName}\n`);
-          NODE
+          npm run lint
+          npm test
+          npm run build:web
+          npm run bindings:check
+          go test ./...
+          go vet ./...
+          go test -race ./internal/...
 
   build:
-    needs: [lint, version-and-tag]
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: mac-arm64
-            os: macos-latest
-            target: aarch64-apple-darwin
+            os: macos-15
             script: build:mac:arm
           - name: mac-x64
-            os: macos-latest
-            target: x86_64-apple-darwin
+            os: macos-15-intel
             script: build:mac:x64
           - name: win-x64
             os: windows-latest
-            target: x86_64-pc-windows-msvc
             script: build:win:x64
-
     runs-on: ${{ matrix.os }}
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install pinned Wails CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
+        env:
+          GOBIN: ${{ github.workspace }}/.cache/tools
+
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        run: choco install nsis --no-progress -y
+
+      - name: Build production package
+        run: npm run ${{ matrix.script }}
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: switch-codex-${{ matrix.name }}
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
         with:
           node-version: 22
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run ${{ matrix.script }}
-        env:
-          APPLE_SIGNING_IDENTITY: "-"
-          TAURI_SIGNING_PRIVATE_KEY: ""
-
-      - name: Rename artifacts (remove en-us tag)
+      - name: Determine release tag
+        id: version
         shell: bash
         run: |
-          node - <<'NODE'
-          const fs = require('fs');
-          const path = require('path');
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            PUSHED_TAG="${GITHUB_REF#refs/tags/}"
+            test "$PUSHED_TAG" = "$TAG" || { echo "Tag $PUSHED_TAG does not match package version $VERSION"; exit 1; }
+            test "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)" || { echo "$TAG does not point to this commit"; exit 1; }
+          else
+            test -z "$(git tag --list "$TAG")" || { echo "$TAG already exists; bump package.json"; exit 1; }
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-          function walk(dir) {
-            if (!fs.existsSync(dir)) return;
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (const entry of entries) {
-              const fullPath = path.join(dir, entry.name);
-              if (entry.isDirectory()) {
-                walk(fullPath);
-              } else if (entry.isFile()) {
-                const lowerName = entry.name.toLowerCase();
-                if (lowerName.includes('en-us') || lowerName.includes('en_us')) {
-                  const newName = entry.name
-                    .replace(/[-_]en[-_]us/gi, '')
-                    .replace(/en[-_]us[-_]?/gi, '');
-                  const newPath = path.join(dir, newName);
-                  console.log(`Renaming ${fullPath} -> ${newPath}`);
-                  fs.renameSync(fullPath, newPath);
-                }
-              }
-            }
-          }
-
-          walk('src-tauri/target/${{ matrix.target }}/release/bundle');
-          NODE
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - name: Download all packages
+        uses: actions/download-artifact@v7
         with:
-          name: switch-codex-${{ matrix.name }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
-          if-no-files-found: warn
+          pattern: switch-codex-*
+          path: release
+          merge-multiple: true
 
-      - name: Publish GitHub release assets
+      - name: Create GitHub Release after all packages pass
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.version-and-tag.outputs.tag_name }}
-          name: Release ${{ needs.version-and-tag.outputs.tag_name }}
-          files: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          files: release/*
+          fail_on_unmatched_files: true

@@ -1,103 +1,88 @@
 # AGENTS.md
 
-本文档为 AI Agent (如 Codex, Antigravity, Claude 等) 在本仓库协作开发时提供指导与约束规范。
+本文档为 AI Agent 在本仓库协作开发时提供指导与约束。
 
 ## 1. 项目概述
 
-`switch-codex` 是一个基于 **Tauri v2** 构建的 macOS 优先的桌面应用程序，用于管理和快速切换多个 Codex `auth.json` 账号配置。
+`switch-codex` 是一个基于 **Wails v3 Beta** 的 macOS 优先桌面应用，用于管理和快速切换多个 Codex `auth.json` 账号，并提供订阅额度、本地用量统计和每日定时调用。
 
 ### 技术栈
-- **后端 / 核心逻辑**: Rust (Tauri v2) (`src-tauri/`)
-- **前端 UI**: TypeScript + React + Ant Design + AntV (`src/`)
-- **前端构建**: Vite
-- **包管理器 / 运行环境**: Node.js >= 22.12 (配置见 `.nvmrc` 和 `package.json`)，包管理器为 `npm`
 
----
+- **后端 / 核心逻辑**：Go 1.26（`main.go`、`app.go`、`internal/`）
+- **桌面框架**：Wails `v3.0.0-beta.18`，Go 依赖、CLI 和 `@wailsio/runtime` 必须固定为相同版本
+- **前端 UI**：TypeScript + React + Ant Design + AntV（`src/`）
+- **前端构建**：Vite
+- **包管理器**：Node.js >= 22.12，npm
 
-## 2. 项目目录结构
+## 2. 主要目录
 
 ```text
 switch-codex/
-├── src/                    # 前端代码目录
-│   ├── index.html          # Vite HTML 入口
-│   ├── main.tsx            # React 应用入口
-│   ├── App.tsx             # 顶层状态与 Tauri IPC 交互
-│   ├── components/         # 可复用 UI 组件
-│   ├── views/              # 账号与用量页面
-│   └── styles.css          # 全局与组件适配样式
-├── src-tauri/              # Rust 后端目录
-│   ├── src/
-│   │   ├── main.rs         # 应用入口、菜单/ macOS Status Item (托盘) 逻辑及 IPC 接口
-│   │   └── store.rs        # 账号数据存储、auth.json 原子替换与校验逻辑
-│   ├── Cargo.toml          # Rust 项目依赖
-│   └── tauri.conf.json     # Tauri v2 配置文件
-├── data/                   # 默认数据存储目录
-│   ├── accounts.json       # 账号配置列表元数据
-│   └── accounts/           # 存储各账号对应的 auth.json
-├── .github/workflows/      # CI/CD 工作流
-│   ├── lint.yml            # 代码校验
-│   └── release.yml         # 自动构建并发布 release
-└── package.json            # Node 项目脚本配置
+├── main.go                  # Wails 入口、窗口、系统事件
+├── app.go                   # 前端绑定服务
+├── menus.go                 # 应用菜单和 macOS 托盘菜单
+├── internal/
+│   ├── platform/            # 原子替换、文件锁、数据目录和平台差异
+│   ├── store/               # 账号存储与凭证切换
+│   ├── usage/               # 配额、本地统计和价格目录
+│   └── scheduler/           # 每日调度与进程树清理
+├── src/                     # 现有 React 前端和 Wails 桥接层
+├── build/                   # Wails、macOS、Windows 构建元数据
+├── scripts/                 # 版本同步和跨平台构建脚本
+├── data/                    # 开发模式本地数据（凭证被 Git 忽略）
+└── .github/workflows/       # 检查与三平台发布
 ```
 
----
+`src-tauri/` 已从版本控制移除。开发机上若还存在该目录，它只用于旧数据迁移，整个目录必须保持 Git 忽略。
 
-## 3. 开发与构建指令
+## 3. 开发和验证
 
-### 环境准备
 ```bash
 nvm use
 npm install
-```
-
-### 开发调试
-```bash
-# 启动 Tauri 开发开发模式
+npm run desktop:setup
 npm run dev
 ```
 
-### 代码检查 (Lint & Check)
-修改代码后，必须运行对应的检查命令确保代码无错误：
+修改后按影响范围运行检查；提交前必须全部通过：
 
 ```bash
-# 前端 TypeScript 类型检查
 npm run lint
-
-# Rust 后端类型与编译检查 (在 src-tauri 目录下执行)
-cd src-tauri && cargo check
+npm test
+npm run build:web
+npm run bindings:check
+go test ./...
+go vet ./...
+go test -race ./internal/...
 ```
 
-### 跨平台打包构建 (Build)
+修改任何绑定服务方法或 DTO 后，运行 `npm run bindings` 并提交 `src/bindings/` 的更新。不要手工修改生成的绑定。
+
+## 4. 跨平台构建
+
 ```bash
-# macOS Apple Silicon (arm64)
 npm run build:mac:arm
-
-# macOS Intel (x64)
 npm run build:mac:x64
-
-# Windows (x64)
 npm run build:win:x64
 ```
-构建产物输出至 `src-tauri/target/<target>/release/bundle/`。
 
----
+安装包输出到 `release/`：macOS 为 DMG，Windows 为 NSIS EXE。中间产物在 `bin/`。macOS 最低版本为 12，支持 arm64/x64；Windows 支持 x64 和 Windows 10 以上版本。正常开发和构建不得依赖 Rust 工具链。
 
-## 4. 数据与核心业务逻辑
+## 5. 数据和安全边界
 
-- **全局数据目录重定向**: 默认存储在 `data/`，可通过环境变量 `CODEX_SWITCH_DATA_DIR` 进行覆盖。
-- **配置切换与安全保障**:
-  - 当前激活的 Codex 认证文件存储在 `~/.codex/auth.json`。
-  - 在切换账号时，核心逻辑会校验目标 `auth.json`，并保留备份 `~/.codex/auth.json.switch-codex.bak` 以防凭证丢失。
-  - 文件替换必须保证原子性与可靠性。
+- `CODEX_SWITCH_DATA_DIR` 优先于所有默认路径。
+- 开发版使用项目 `data/`；正式版沿用 `com.switchcodex.app/data` 的旧版目录。
+- 当前激活文件为 `~/.codex/auth.json`；切换前保留 `auth.json.switch-codex.bak`。
+- 凭证文件必须使用同目录临时文件、刷盘和原子替换；Unix 权限保持 `0600`。
+- 配额和调度凭证只在 Go 后端处理。定时调用必须使用独立临时 `CODEX_HOME`，退出或超时时清理整个进程树。
+- `scheduler.lock` 必须继续阻止新旧应用同时操作同一数据目录。
+- 不得提交 `data/` 或遗留 `src-tauri/data/` 中的账号、设置、缓存、锁和临时凭证。
 
----
+## 6. 协作和发布规则
 
-## 5. AI Agent 协作规范
-
-1. **保持轻量性**: 前端基于 React、Ant Design 与 AntV，优先复用现有依赖与组件，避免引入无关 npm 包。
-2. **每次修改后进行代码验证**:
-   - 修改前端 TypeScript/React 代码后，执行 `npm run lint`。
-   - 修改 Rust 代码后，进入 `src-tauri` 目录执行 `cargo check` 或 `cargo clippy`。
-3. **跨平台兼容意识**: 本项目支持 macOS (arm64/x64) 与 Windows (x64) 构建。虽然当前为 macOS 优先（支持应用菜单和状态栏 Status Item），但底层 Rust 核心功能需保持平台无关性。
-4. **注释与文档保持**: 修改代码时保留现有清晰的注释说明，涉及底层协议或存储格式变动时同步更新 README.md 及相关文档。
-5. **发布版本管理（强制）**: 因为日常直接在 `main` 分支开发，每次提交任何会触发 Release 的代码前，必须将应用版本升级为一个尚未发布的有效语义化版本（`MAJOR.MINOR.PATCH`），不得复用已有 Git tag 对应的版本。`npm run lint` 会强制校验这一要求；请在提交前执行该命令。以下文件中的项目版本必须保持完全一致：`package.json`、`package-lock.json` 顶层 `version` 与 `packages[\"\"].version`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 中 `switch-codex` 包的 `version`、`src-tauri/tauri.conf.json`。提交前应核对 `git tag --list \"v*\"`，确认目标 `v<version>` 尚不存在。
+1. 优先复用现有 React、Ant Design 和 AntV 依赖，避免无关 npm 包或 UI 改版。
+2. 业务包不得依赖 Wails 窗口对象；通过服务层和接口注入时钟、HTTP、进程执行器及事件出口。
+3. 保持 macOS 和 Windows 差异明确；修改文件操作、调度或进程代码时必须考虑两个平台。
+4. 数据格式、命令或事件契约变化时同步更新测试和 README。
+5. `package.json` 是唯一版本来源。更新版本后运行 `npm run version:sync`；`npm run lint` 会检查生成元数据、Wails 三方版本和 Git Tag。
+6. 发布版本必须是尚未发布的 `MAJOR.MINOR.PATCH`。已有 Tag 只允许在该 Tag 指向当前提交的正式构建中复用。

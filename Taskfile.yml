@@ -1,0 +1,16 @@
+version: '3'
+vars:
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 1420}}'
+tasks:
+  build:
+    cmds:
+      - node scripts/desktop.mjs build {{OS}} {{ARCH}} {{if eq .DEV "true"}}--dev{{end}}
+  package:
+    cmds:
+      - node scripts/desktop.mjs package {{OS}} {{ARCH}}
+  run:
+    cmds:
+      - node scripts/desktop.mjs run
+  dev:frontend:
+    cmds:
+      - npm run dev:web -- --port {{.VITE_PORT}}

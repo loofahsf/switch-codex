@@ -5,7 +5,7 @@ import zhCN from 'antd/locale/zh_CN';
 import App from './App';
 import './styles.css';
 
-document.documentElement.classList.add('is-tauri');
+document.documentElement.classList.add('is-desktop');
 
 createRoot(document.getElementById('root')!).render(
   <ConfigProvider

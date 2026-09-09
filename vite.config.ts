@@ -33,7 +33,7 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(packageJson.version)
   },
   clearScreen: false,
-  envPrefix: ['VITE_', 'TAURI_ENV_*'],
+  envPrefix: ['VITE_'],
   optimizeDeps: {
     rolldownOptions: {
       output: {
@@ -51,7 +51,7 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     watch: {
-      ignored: ['**/src-tauri/**']
+      ignored: ['**/src-tauri/**', '**/data/**', '**/.cache/**', '**/bin/**']
     }
   },
   build: {

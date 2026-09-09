@@ -1,0 +1,3 @@
+{"timestamp":"2026-09-09T09:00:00Z","type":"turn_context","payload":{"model":"gpt-test"}}
+{"timestamp":"2026-09-09T09:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"must not be returned"}}
+{"timestamp":"2026-09-09T09:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":100,"reasoning_output_tokens":25},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":100,"reasoning_output_tokens":25}}}}

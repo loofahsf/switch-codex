@@ -24,14 +24,14 @@ export default function Sidebar({
   return (
     <aside className="sidebar" id="appSidebar">
       <div className="sidebar-top">
-        <div className="traffic-lights" aria-hidden="true" data-tauri-drag-region="true">
+        <div className="traffic-lights" aria-hidden="true" data-window-drag-region="true">
           <span />
           <span />
           <span />
         </div>
-        <div className="brand" data-tauri-drag-region="true">
-          <img src={appIcon} alt="" data-tauri-drag-region="true" />
-          <strong data-tauri-drag-region="true">Switch Codex</strong>
+        <div className="brand" data-window-drag-region="true">
+          <img src={appIcon} alt="" data-window-drag-region="true" />
+          <strong data-window-drag-region="true">Switch Codex</strong>
         </div>
         <nav className="view-tabs" aria-label="应用页面">
           <button

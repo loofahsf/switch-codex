@@ -27,6 +27,7 @@ interface UsageViewProps {
 
 const rangeOptions = [
   { value: 7, label: '最近 7 天' },
+  { value: 14, label: '最近 14 天' },
   { value: 30, label: '最近 30 天' },
   { value: 90, label: '最近 90 天' },
   { value: 0, label: '全部记录' }
@@ -47,6 +48,7 @@ export default function UsageView({
   onRefresh,
   onOpenUrl
 }: UsageViewProps) {
+  const rangeLabel = rangeOptions.find((option) => option.value === range)?.label ?? '当前范围';
   const summary = stats?.summary;
   const cacheRatio = summary?.inputTokens
     ? (summary.cachedInputTokens / summary.inputTokens) * 100
@@ -67,8 +69,8 @@ export default function UsageView({
       className={`view usage-view${active ? ' is-active' : ''}`}
       aria-busy={loading}
     >
-      <header className="content-header usage-header" data-tauri-drag-region="true">
-        <h1 data-tauri-drag-region="true">订阅配额与本地 Token</h1>
+      <header className="content-header usage-header" data-window-drag-region="true">
+        <h1 data-window-drag-region="true">订阅配额与本地 Token</h1>
         <div className="usage-controls">
           <span className="sr-only" id="usageRangeLabel">
             统计范围
@@ -148,7 +150,7 @@ export default function UsageView({
           <article className="usage-subpanel chart-panel">
             <div className="subpanel-heading">
               <h4>每日 Token 趋势</h4>
-              <span>最近 14 个活跃日</span>
+              <span>{rangeLabel}</span>
             </div>
             <div className="daily-chart">
               {!stats?.daily.length ? (

@@ -5,7 +5,7 @@ import AccountsView from './views/AccountsView';
 import UsageView from './views/UsageView';
 import SettingsView from './views/SettingsView';
 import { formatAccountId } from './format';
-import { confirm, getErrorMessage, invoke, listen } from './tauri';
+import { confirm, getErrorMessage, invoke, listen } from './platform';
 import type {
   AccountItem,
   AccountQuotas,
@@ -59,13 +59,13 @@ export default function App() {
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [refreshingQuotaAccountId, setRefreshingQuotaAccountId] = useState<string | null>(null);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
-  const [usageRange, setUsageRange] = useState(30);
+  const [usageRange, setUsageRange] = useState(14);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageLoadingText, setUsageLoadingText] = useState('正在查询用量数据…');
 
   const viewRef = useRef<ViewName>('accounts');
   const quotasRef = useRef<AccountQuotas | null>(null);
-  const usageRangeRef = useRef(30);
+  const usageRangeRef = useRef(14);
   const usageLoadedRef = useRef(false);
   const usageLoadingRef = useRef(false);
   const quotaLoadingRef = useRef(false);

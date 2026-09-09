@@ -1,0 +1,6 @@
+{"timestamp":"2026-09-09T09:00:00Z","type":"turn_context","payload":{"turn_id":"turn-aborted","model":"gpt-test"}}
+{"timestamp":"2026-09-09T09:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":50}}}}
+{"timestamp":"2026-09-09T09:00:00Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-aborted"}}
+{"timestamp":"2026-09-09T09:00:00Z","type":"turn_context","payload":{"turn_id":"turn-complete","model":"gpt-test"}}
+{"timestamp":"2026-09-09T09:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":150,"output_tokens":50}}}}
+{"timestamp":"2026-09-09T09:00:00Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-complete","duration_ms":3000}}
