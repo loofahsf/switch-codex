@@ -1,10 +1,12 @@
 // Prevents a console window from appearing on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod power;
+mod scheduler;
 mod store;
 mod usage;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use store::{AccountAuthUpdate, AccountsState, Store};
 #[cfg(target_os = "macos")]
 use tauri::tray::TrayIconBuilder;
@@ -45,6 +47,34 @@ struct ChosenFile {
 // ── Tauri commands ─────────────────────────────────────────────────────────
 // Tauri automatically maps JS camelCase argument keys to Rust snake_case
 // parameter names (e.g. JS `authJson` → Rust `auth_json`).
+
+#[tauri::command]
+fn get_settings(scheduler: tauri::State<Arc<scheduler::Scheduler>>) -> scheduler::Settings {
+    scheduler.settings()
+}
+
+#[tauri::command]
+async fn save_settings(
+    app: AppHandle,
+    scheduler: tauri::State<'_, Arc<scheduler::Scheduler>>,
+    settings: scheduler::Settings,
+) -> Result<scheduler::Settings, String> {
+    let scheduler = scheduler.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = scheduler.save(settings)?;
+        let _ = app.emit("scheduled-run-changed", scheduler.status());
+        Ok(settings)
+    })
+    .await
+    .map_err(|_| "保存设置任务中断".to_string())?
+}
+
+#[tauri::command]
+fn get_scheduled_run_status(
+    scheduler: tauri::State<Arc<scheduler::Scheduler>>,
+) -> scheduler::RunStatus {
+    scheduler.status()
+}
 
 #[tauri::command]
 fn list_accounts(store: tauri::State<Mutex<Store>>) -> Result<AccountsState, String> {
@@ -510,6 +540,8 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = get_data_dir(app);
+    power::install()?;
+    let scheduler = scheduler::Scheduler::new(&data_dir, data_dir.join("scheduled-runtime"))?;
     let store = Store::new(data_dir);
     store.ensure_ready()?;
 
@@ -517,6 +549,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     // Register store as app-managed state (Arc<Mutex<Store>> under the hood).
     app.manage(Mutex::new(store));
+    app.manage(scheduler.clone());
 
     // Application menu (visible on macOS menu bar).
     let app_menu = build_app_menu(app.handle(), &initial_state)?;
@@ -544,6 +577,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             .build(app.handle())?;
     }
 
+    scheduler.start(app.handle().clone());
     Ok(())
 }
 
@@ -576,6 +610,9 @@ fn main() {
         // Platform-specific window close behaviour — see handle_window_event above.
         .on_window_event(handle_window_event)
         .invoke_handler(tauri::generate_handler![
+            get_settings,
+            save_settings,
+            get_scheduled_run_status,
             list_accounts,
             add_account,
             remove_account,
@@ -590,6 +627,9 @@ fn main() {
         .build(context)
         .expect("error while building tauri application")
         .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                _app.state::<Arc<scheduler::Scheduler>>().shutdown();
+            }
             // macOS Dock reopen: when the user clicks the Dock icon to restore a
             // hidden window, show and focus the main window.
             #[cfg(target_os = "macos")]

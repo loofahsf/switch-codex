@@ -32,3 +32,11 @@ src-tauri/data/accounts.json
 *.pem
 *.key
 
+
+# Scheduled invocation settings, results, and isolated credentials
+/data/settings.json
+/src-tauri/data/settings.json
+/data/scheduled-runtime/
+/src-tauri/data/scheduled-runtime/
+/data/scheduler.lock
+/src-tauri/data/scheduler.lock

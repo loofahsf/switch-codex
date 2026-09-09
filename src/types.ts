@@ -1,4 +1,29 @@
-export type ViewName = 'accounts' | 'usage';
+export type ViewName = 'accounts' | 'usage' | 'settings';
+export interface Settings {
+  enabled: boolean;
+  time: string | null;
+  cliPath: string | null;
+}
+export type ScheduledAccountStatus = 'waiting' | 'running' | 'success' | 'failed' | 'interrupted';
+export interface ScheduledAccountResult {
+  accountId: string;
+  accountName: string;
+  status: ScheduledAccountStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+  message: string | null;
+}
+export interface ScheduledRunStatus {
+  nextRunAt: string | null;
+  timezone: string;
+  running: boolean;
+  error: string | null;
+  lastRun: {
+    startedAt: string;
+    finishedAt: string | null;
+    accounts: ScheduledAccountResult[];
+  } | null;
+}
 export type MessageType = 'neutral' | 'success' | 'error';
 
 export interface InlineMessage {

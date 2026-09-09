@@ -256,6 +256,36 @@ impl Store {
         })
     }
 
+    /// Compare-and-write under the Store mutex: never resurrect a removed account
+    /// or overwrite credentials that the user replaced while a batch was running.
+    pub fn persist_refreshed_auth(
+        &self,
+        account_id: &str,
+        original: &str,
+        refreshed: &str,
+    ) -> Result<(), String> {
+        if original == refreshed {
+            return Ok(());
+        }
+        let normalized = normalize_auth_json(refreshed)?;
+        let identity = extract_account_id(original)?;
+        if identity.is_none() || identity != extract_account_id(&normalized)? {
+            return Err("刷新后的认证身份无法确认，未覆盖已保存凭证".into());
+        }
+        let mut index = self.read_index()?;
+        let Some(account) = index.accounts.iter_mut().find(|a| a.id == account_id) else {
+            return Err("账号已删除，未回写刷新凭证".into());
+        };
+        let path = self.account_auth_path(account_id);
+        let current = std::fs::read_to_string(&path).map_err(|_| "无法读取待回写凭证")?;
+        if current != original {
+            return Err("账号凭证已更新，未覆盖新的凭证".into());
+        }
+        write_file_atomic(&path, &normalized, 0o600).map_err(|_| "无法保存刷新凭证")?;
+        account.updated_at = chrono::Utc::now().to_rfc3339();
+        self.write_index(&index)
+    }
+
     fn copy_account_to_codex(&self, account: &Account) -> Result<(), String> {
         let source = self.account_auth_path(&account.id);
         let target = Self::codex_auth_path();

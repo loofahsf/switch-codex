@@ -222,3 +222,25 @@ h1, h2, h3, h4, p { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   .app-shell, .sidebar-toggle svg { transition: none; }
 }
+
+.settings-content { gap: 16px; }
+.settings-panel { flex: 0 0 auto; padding: 20px; }
+.settings-heading { align-items: center; gap: 16px; }
+.settings-fields { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; }
+.settings-fields > .field { width: 170px; }
+.settings-schedule { display: grid; gap: 6px; color: var(--subtle); font-size: 11px; }
+.settings-schedule strong { color: var(--ink); font-weight: 500; }
+.settings-details { display: grid; gap: 10px; margin: 18px 0; padding: 14px; background: var(--bg); border-radius: 6px; font-size: 12px; }
+.settings-details > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px; }
+.settings-details dt { color: var(--muted); }
+.settings-details dd { margin: 0; overflow-wrap: anywhere; }
+.settings-help { margin: 8px 0; color: var(--subtle); font-size: 11px; line-height: 1.7; }
+.settings-cli { margin: 18px 0; }
+.settings-cli summary { margin-bottom: 12px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+.settings-success { color: var(--accent); font-size: 11px; }
+.settings-error { margin-top: 10px; color: var(--danger); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.settings-results { display: grid; gap: 10px; margin-top: 14px; }
+.settings-result { padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.settings-result-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.settings-result-title strong { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }

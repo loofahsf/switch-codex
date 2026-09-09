@@ -1,7 +1,8 @@
 [package]
 name = "switch-codex"
-version = "1.1.1"
+version = "1.2.0"
 edition = "2021"
+rust-version = "1.89"
 
 [[bin]]
 name = "switch-codex"
@@ -24,10 +25,14 @@ tokio = { version = "1", features = ["sync"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }
 futures-util = "0.3"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSOpenPanel", "NSSavePanel", "NSWindow"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSOpenPanel", "NSSavePanel", "NSWindow", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSURL", "NSNotification", "NSOperation", "block2"] }
 
 [profile.release]
 opt-level = "s"

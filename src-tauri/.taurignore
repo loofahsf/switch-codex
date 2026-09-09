@@ -1,0 +1,6 @@
+# Local runtime state and credential refreshes must never restart tauri dev.
+data/**
+**/settings.json
+**/scheduled-runtime/**
+**/scheduler.lock
+**/.settings.json.*.tmp

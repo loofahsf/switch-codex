@@ -2,6 +2,7 @@ import type { AccountsState, ViewName } from '../types';
 import appIcon from '../assets/app-icon.svg';
 import chartIcon from '../assets/chart-bar.svg';
 import userIcon from '../assets/user.svg';
+import settingsIcon from '../assets/settings.svg';
 
 interface SidebarProps {
   collapsed: boolean;
@@ -52,6 +53,16 @@ export default function Sidebar({
           >
             <img src={chartIcon} alt="" />
             <span>用量统计</span>
+          </button>
+          <button
+            type="button"
+            className={`view-tab${view === 'settings' ? ' is-active' : ''}`}
+            aria-current={view === 'settings' ? 'page' : undefined}
+            title="设置"
+            onClick={() => onViewChange('settings')}
+          >
+            <img src={settingsIcon} alt="" />
+            <span>设置</span>
           </button>
         </nav>
       </div>

@@ -3,6 +3,7 @@ import AntdApp from 'antd/es/app';
 import Sidebar from './components/Sidebar';
 import AccountsView from './views/AccountsView';
 import UsageView from './views/UsageView';
+import SettingsView from './views/SettingsView';
 import { formatAccountId } from './format';
 import { confirm, getErrorMessage, invoke, listen } from './tauri';
 import type {
@@ -171,11 +172,20 @@ export default function App() {
       console.error('Failed to listen for switch-error:', error);
     });
 
+    listen<AccountQuotas>('scheduled-quotas-changed', (nextQuotas) => {
+      if (!disposed) updateQuotas(nextQuotas);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    }).catch((error) => {
+      console.error('Failed to listen for scheduled-quotas-changed:', error);
+    });
+
     return () => {
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [refreshUsage, toast]);
+  }, [refreshUsage, toast, updateQuotas]);
 
   function changeSidebarCollapsed(collapsed: boolean) {
     setSidebarCollapsed(collapsed);
@@ -358,6 +368,7 @@ export default function App() {
         onViewChange={changeView}
       />
       <section className="workspace">
+        <SettingsView active={view === 'settings'} />
         <AccountsView
           active={view === 'accounts'}
           state={state}
