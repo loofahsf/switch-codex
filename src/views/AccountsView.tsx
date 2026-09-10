@@ -5,6 +5,7 @@ import type {
   AccountItem,
   AccountQuotas,
   AccountsState,
+  AuthSyncStatus,
   ChosenFile,
   InlineMessage
 } from '../types';
@@ -18,11 +19,14 @@ interface AccountsViewProps {
   quotas: AccountQuotas | null;
   quotaLoading: boolean;
   refreshingQuotaAccountId: string | null;
+  authSyncStatus: AuthSyncStatus;
+  authSyncLoading: boolean;
   inlineMessage: InlineMessage;
   onChooseFile: () => Promise<ChosenFile | null>;
   onAddAccount: (name: string, authJson: string) => Promise<boolean>;
   onSwitchAccount: (account: AccountItem) => Promise<void>;
-  onUpdateAccount: (account: AccountItem) => Promise<void>;
+  onCheckAuthSync: () => Promise<void>;
+  onAddPendingCurrentAccount: (name: string) => Promise<boolean>;
   onRemoveAccount: (account: AccountItem) => Promise<void>;
   onRefreshQuotas: () => Promise<void>;
   onRefreshAccountQuota: (account: AccountItem) => Promise<void>;
@@ -34,11 +38,14 @@ export default function AccountsView({
   quotas,
   quotaLoading,
   refreshingQuotaAccountId,
+  authSyncStatus,
+  authSyncLoading,
   inlineMessage,
   onChooseFile,
   onAddAccount,
   onSwitchAccount,
-  onUpdateAccount,
+  onCheckAuthSync,
+  onAddPendingCurrentAccount,
   onRemoveAccount,
   onRefreshQuotas,
   onRefreshAccountQuota
@@ -48,7 +55,8 @@ export default function AccountsView({
   const [selectedAuth, setSelectedAuth] = useState<ChosenFile | null>(null);
   const [saving, setSaving] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
-  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [pendingName, setPendingName] = useState('');
+  const [savingPending, setSavingPending] = useState(false);
 
   async function chooseAuthFile() {
     const file = await onChooseFile();
@@ -83,14 +91,21 @@ export default function AccountsView({
     }
   }
 
-  async function updateAccount(account: AccountItem) {
-    setSyncingId(account.id);
+  async function addPending(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingPending(true);
     try {
-      await onUpdateAccount(account);
+      if (await onAddPendingCurrentAccount(pendingName)) {
+        setPendingName('');
+      }
     } finally {
-      setSyncingId(null);
+      setSavingPending(false);
     }
   }
+
+  const checkedAt = authSyncStatus.checkedAt
+    ? new Date(authSyncStatus.checkedAt).toLocaleString('zh-CN', { hour12: false })
+    : '尚未检查';
 
   return (
     <section className={`view${active ? ' is-active' : ''}`}>
@@ -110,6 +125,38 @@ export default function AccountsView({
       </header>
 
       <div className={`content-grid${formCollapsed ? ' is-form-collapsed' : ''}`}>
+        <section className={`auth-sync-panel is-${authSyncStatus.state}`} aria-live="polite">
+          <div className="auth-sync-summary">
+            <div>
+              <strong>{authSyncStatus.enabled ? '认证文件自动同步已开启' : '认证文件自动同步已关闭'}</strong>
+              <span>{authSyncStatus.message || '每 30 秒只检查 ~/.codex/auth.json'}</span>
+              <small>{authSyncStatus.enabled ? `最多延迟 30 秒 · 最近检查：${checkedAt}` : '可在设置页面重新开启'}</small>
+            </div>
+            <Button
+              type="text"
+              className="auth-sync-check-button"
+              disabled={!authSyncStatus.enabled || authSyncLoading || authSyncStatus.state === 'checking'}
+              loading={authSyncLoading || authSyncStatus.state === 'checking'}
+              onClick={() => void onCheckAuthSync()}
+            >
+              立即检查
+            </Button>
+          </div>
+          {authSyncStatus.state === 'unknown' && authSyncStatus.pendingId ? (
+            <form className="auth-sync-pending" onSubmit={(event) => void addPending(event)}>
+              <Input
+                value={pendingName}
+                autoComplete="off"
+                placeholder="为当前登录账号命名"
+                aria-label="当前登录账号名称"
+                required
+                onChange={(event) => setPendingName(event.target.value)}
+              />
+              <Button type="primary" htmlType="submit" loading={savingPending}>添加当前账号</Button>
+            </form>
+          ) : null}
+        </section>
+
         <form className={`panel account-form${formCollapsed ? ' is-collapsed' : ''}`} onSubmit={submit}>
           <div className="panel-heading">
             <div>
@@ -198,14 +245,6 @@ export default function AccountsView({
                           disabled={quotaLoading || refreshingQuotaAccountId !== null}
                           loading={refreshingQuotaAccountId === account.id}
                           onClick={() => onRefreshAccountQuota(account)}
-                        />
-                        <Button
-                          type="text"
-                          className="sync-auth-button"
-                          title="用当前 ~/.codex/auth.json 覆盖保存的文件"
-                          aria-label="反向同步认证文件"
-                          disabled={syncingId === account.id}
-                          onClick={() => updateAccount(account)}
                         />
                         <Button
                           type="text"

@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const names = ['ListAccounts', 'AddAccount', 'RemoveAccount', 'SwitchAccount', 'UpdateAccountAuth',
+const names = ['ListAccounts', 'AddAccount', 'RemoveAccount', 'SwitchAccount', 'GetAuthSyncStatus',
+  'CheckAuthSyncNow', 'AddPendingCurrentAccount',
   'ChooseAuthFile', 'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'GetSettings',
   'DetectCodexCLIPath', 'SaveSettings', 'GetScheduledRunStatus', 'OpenURL', 'Confirm'];
 const mocks = vi.hoisted(() => ({ calls: {} as Record<string, ReturnType<typeof vi.fn>>, on: vi.fn() }));
 vi.mock('@wailsio/runtime', () => ({ Events: { On: mocks.on } }));
 vi.mock('./bindings/switch-codex/appservice', () => Object.fromEntries([
-  'ListAccounts', 'AddAccount', 'RemoveAccount', 'SwitchAccount', 'UpdateAccountAuth',
+  'ListAccounts', 'AddAccount', 'RemoveAccount', 'SwitchAccount', 'GetAuthSyncStatus',
+  'CheckAuthSyncNow', 'AddPendingCurrentAccount',
   'ChooseAuthFile', 'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'GetSettings',
   'DetectCodexCLIPath', 'SaveSettings', 'GetScheduledRunStatus', 'OpenURL', 'Confirm'
 ].map((name) => [name, mocks.calls[name] = vi.fn().mockResolvedValue(null)])));
@@ -20,7 +22,9 @@ describe('desktop command contract', () => {
     ['add_account', { name: 'test', authJson: 'synthetic' }, 'AddAccount', ['test', 'synthetic']],
     ['remove_account', { accountId: 'id' }, 'RemoveAccount', ['id']],
     ['switch_account', { accountId: 'id' }, 'SwitchAccount', ['id']],
-    ['update_account_auth', { accountId: 'id', confirmMismatch: false }, 'UpdateAccountAuth', ['id', false]],
+    ['get_auth_sync_status', {}, 'GetAuthSyncStatus', []],
+    ['check_auth_sync_now', {}, 'CheckAuthSyncNow', []],
+    ['add_pending_current_account', { pendingId: 'pending', name: 'work' }, 'AddPendingCurrentAccount', ['pending', 'work']],
     ['choose_auth_file', {}, 'ChooseAuthFile', []],
     ['get_usage_stats', { days: 30, refreshPrices: true }, 'GetUsageStats', [30, true]],
     ['get_usage_stats', { days: 0 }, 'GetUsageStats', [0, null]],
@@ -28,7 +32,7 @@ describe('desktop command contract', () => {
     ['get_account_quota', { accountId: 'id' }, 'GetAccountQuota', ['id']],
     ['get_settings', {}, 'GetSettings', []],
     ['detect_codex_cli_path', {}, 'DetectCodexCLIPath', []],
-    ['save_settings', { settings: { enabled: false, time: null, cliPath: null } }, 'SaveSettings', [{ enabled: false, time: null, cliPath: null }]],
+    ['save_settings', { settings: { enabled: false, time: null, cliPath: null, autoSyncAuth: true } }, 'SaveSettings', [{ enabled: false, time: null, cliPath: null, autoSyncAuth: true }]],
     ['get_scheduled_run_status', {}, 'GetScheduledRunStatus', []],
     ['open_url', { url: 'https://example.com' }, 'OpenURL', ['https://example.com']]
   ] as const)('%s maps parameters without changing values', async (command, args, method, parameters) => {

@@ -120,7 +120,8 @@ func TestInvocationIsolationAndResponseContract(t *testing.T) {
 	for _, key := range []string{"OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"} {
 		t.Setenv(key, "synthetic")
 	}
-	cmd := invocation("/synthetic/codex", "/isolated/home", "/isolated/work", Prompt)
+	prompt := promptPool("2026-09-09")[0]
+	cmd := invocation("/synthetic/codex", "/isolated/home", "/isolated/work", prompt)
 	env := strings.Join(cmd.Env, "\n")
 	if !strings.Contains(env, "CODEX_HOME=/isolated/home") {
 		t.Fatal("missing isolated home")
@@ -130,7 +131,7 @@ func TestInvocationIsolationAndResponseContract(t *testing.T) {
 			t.Fatalf("leaked %s", key)
 		}
 	}
-	for _, arg := range []string{Model, Prompt, "--ignore-user-config", "--ephemeral", "--json", "read-only", "features.shell_tool=false", "cli_auth_credentials_store=\"file\""} {
+	for _, arg := range []string{Model, prompt, "--ignore-user-config", "--ephemeral", "--json", "read-only", "features.shell_tool=false", "cli_auth_credentials_store=\"file\"", "web_search=\"disabled\""} {
 		found := false
 		for _, actual := range cmd.Args {
 			found = found || arg == actual

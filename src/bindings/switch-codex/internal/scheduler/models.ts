@@ -5,6 +5,7 @@ export interface AccountResult {
     "accountId": string;
     "accountName": string;
     "status": AccountStatus;
+    "scheduledAt": string | null;
     "startedAt": string | null;
     "finishedAt": string | null;
     "message": string | null;
@@ -47,4 +48,5 @@ export interface Settings {
     "enabled": boolean;
     "time": string | null;
     "cliPath": string | null;
+    "autoSyncAuth": boolean;
 }

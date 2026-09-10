@@ -9,7 +9,7 @@ import dayjs from 'dayjs';
 import { getErrorMessage, invoke, listen } from '../platform';
 import type { ScheduledAccountResult, ScheduledAccountStatus, ScheduledRunStatus, Settings } from '../types';
 
-const defaultSettings: Settings = { enabled: false, time: null, cliPath: null };
+const defaultSettings: Settings = { enabled: false, time: null, cliPath: null, autoSyncAuth: true };
 const statusLabels: Record<ScheduledAccountStatus, string> = {
   waiting: '等待中', running: '执行中', success: '成功', failed: '失败', interrupted: '已中断'
 };
@@ -27,6 +27,14 @@ function responseText(account: ScheduledAccountResult): string {
   if (account.status === 'waiting') return '等待执行，尚无响应。';
   if (account.status === 'running') return '执行中，尚未收到完整响应。';
   return '本次调用未收到完整的助手响应。';
+}
+
+function timingText(account: ScheduledAccountResult): string {
+  const parts: string[] = [];
+  if (account.scheduledAt) parts.push(`计划：${formatTime(account.scheduledAt)}`);
+  if (account.startedAt) parts.push(`开始：${formatTime(account.startedAt)}`);
+  if (account.finishedAt) parts.push(`结束：${formatTime(account.finishedAt)}`);
+  return parts.join(' · ') || '等待执行';
 }
 
 export default function SettingsView({ active }: { active: boolean }) {
@@ -103,7 +111,7 @@ export default function SettingsView({ active }: { active: boolean }) {
       const next = await invoke<Settings>('save_settings', { settings });
       setSettings(next);
       setSaved(next);
-      setMessage('设置已保存，下次任务将按新设置执行。');
+      setMessage('设置已保存。');
     } catch (reason) {
       setError(getErrorMessage(reason, '保存设置失败'));
     } finally {
@@ -126,6 +134,20 @@ export default function SettingsView({ active }: { active: boolean }) {
       </header>
       <div className="content-grid settings-content" aria-busy={loading}>
         <form className="panel settings-panel" onSubmit={(event) => void save(event)}>
+          <div className="panel-heading settings-heading">
+            <div>
+              <h2>认证文件自动同步</h2>
+              <span>每 30 秒只检查 ~/.codex/auth.json，不扫描 Codex 目录。</span>
+            </div>
+            <Switch
+              aria-label="启用认证文件自动同步"
+              checked={settings.autoSyncAuth}
+              disabled={loading || saving || saved === null}
+              onChange={(autoSyncAuth) => { setSettings((value) => ({ ...value, autoSyncAuth })); setMessage(''); }}
+            />
+          </div>
+          <p className="settings-help">身份唯一匹配时自动保存 Token 更新；检测到其他已保存账号时安全跟随，身份不明确时不会覆盖。</p>
+          <div className="settings-divider" />
           <div className="panel-heading settings-heading">
             <div>
               <h2>每日定时调用</h2>
@@ -159,10 +181,10 @@ export default function SettingsView({ active }: { active: boolean }) {
           </div>
           <dl className="settings-details">
             <div><dt>模型</dt><dd><code>gpt-5.6-luna</code></dd></div>
-            <div><dt>提示词</dt><dd>What model are you?</dd></div>
-            <div><dt>执行方式</dt><dd>串行调用，每次只运行一个账号</dd></div>
+            <div><dt>提示词</dt><dd>内置随机小任务</dd></div>
+            <div><dt>执行方式</dt><dd>独立随机延迟 60–300 秒后并行执行</dd></div>
           </dl>
-          <p className="settings-help">每分钟检查一次，整批启动允许延迟最多 5 分钟。开始时固定账号队列，排队超过 5 分钟仍继续执行；单账号超过 120 秒会结束并继续下一个。</p>
+          <p className="settings-help">每分钟检查一次，整批启动允许延迟最多 5 分钟。开始时固定账号队列、随机任务和计划时间；单账号实际启动后超过 120 秒会结束，不影响其他账号。</p>
           <p className="settings-help">请保持应用运行、电脑清醒并联网。退出或休眠错过的任务不补跑。关闭定时调用或修改设置不会停止已经开始的队列。五小时窗口以服务端额度数据为准。</p>
           <details className="settings-cli">
             <summary>Codex CLI 路径（可选）</summary>
@@ -203,7 +225,7 @@ export default function SettingsView({ active }: { active: boolean }) {
                     onClick={() => setSelected({ batchStartedAt: batch.startedAt, accountId: account.accountId })}
                   >
                     <span className="settings-result-title"><strong>{account.accountName}</strong><Tag color={statusColors[account.status]}>{statusLabels[account.status]}</Tag></span>
-                    <span className="settings-help">{account.startedAt ? `开始：${formatTime(account.startedAt)}` : '等待前面的账号完成'}{account.finishedAt ? ` · 结束：${formatTime(account.finishedAt)}` : ''}</span>
+                    <span className="settings-help">{timingText(account)}</span>
                     {account.message && <span className={account.status === 'failed' ? 'settings-error' : 'settings-help'}>{account.message}</span>}
                   </button>
                 ))}
@@ -221,6 +243,7 @@ export default function SettingsView({ active }: { active: boolean }) {
           <dl className="settings-details">
             <div><dt>账号</dt><dd>{selectedAccount.accountName}</dd></div>
             <div><dt>执行状态</dt><dd><Tag color={statusColors[selectedAccount.status]}>{statusLabels[selectedAccount.status]}</Tag></dd></div>
+            <div><dt>计划时间</dt><dd>{formatTime(selectedAccount.scheduledAt)}</dd></div>
             <div><dt>开始时间</dt><dd>{formatTime(selectedAccount.startedAt)}</dd></div>
             <div><dt>结束时间</dt><dd>{formatTime(selectedAccount.finishedAt)}</dd></div>
           </dl>

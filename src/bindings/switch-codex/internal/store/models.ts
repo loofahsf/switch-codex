@@ -16,10 +16,3 @@ export interface AccountsState {
     "activeAccountId": string | null;
     "accounts": AccountItem[] | null;
 }
-
-export interface AuthUpdate {
-    "updated": boolean;
-    "storedAccountId": string | null;
-    "currentAccountId": string | null;
-    "state": AccountsState | null;
-}

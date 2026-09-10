@@ -3,6 +3,8 @@ package store
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,11 +40,29 @@ type AccountsState struct {
 	ActiveAccountID *string       `json:"activeAccountId"`
 	Accounts        []AccountItem `json:"accounts"`
 }
-type AuthUpdate struct {
-	Updated          bool           `json:"updated"`
-	StoredAccountID  *string        `json:"storedAccountId"`
-	CurrentAccountID *string        `json:"currentAccountId"`
-	State            *AccountsState `json:"state"`
+type CredentialIdentity struct {
+	mode, userID, workspaceID string
+	apiKeyHash                [sha256.Size]byte
+}
+
+func (i CredentialIdentity) Equal(other CredentialIdentity) bool { return i == other }
+
+type ReconcileOutcome string
+
+const (
+	ReconcileUpToDate        ReconcileOutcome = "up_to_date"
+	ReconcileSynced          ReconcileOutcome = "synced"
+	ReconcileFollowed        ReconcileOutcome = "followed"
+	ReconcileUnknown         ReconcileOutcome = "unknown"
+	ReconcileAmbiguous       ReconcileOutcome = "ambiguous"
+	ReconcileIdentityMissing ReconcileOutcome = "identity_missing"
+)
+
+type ReconcileResult struct {
+	Outcome     ReconcileOutcome
+	AccountID   *string
+	AccountName *string
+	State       *AccountsState
 }
 
 // Snapshot cannot be marshalled into a renderer payload; credentials remain private.
@@ -127,13 +147,29 @@ func (s *Store) ListAccounts() (AccountsState, error) {
 func (s *Store) AddAccount(name, authJSON string) (AccountsState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return AccountsState{}, errors.New("账号名字不能为空")
-	}
 	normalized, err := NormalizeAuth([]byte(authJSON))
 	if err != nil {
 		return AccountsState{}, err
+	}
+	return s.addNormalizedAccount(name, normalized, false)
+}
+
+// AddCurrentAccount stores a credential that is already active without
+// rewriting TargetAuthPath or its backup.
+func (s *Store) AddCurrentAccount(name string, auth []byte) (AccountsState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	normalized, err := NormalizeAuth(auth)
+	if err != nil {
+		return AccountsState{}, err
+	}
+	return s.addNormalizedAccount(name, normalized, true)
+}
+
+func (s *Store) addNormalizedAccount(name string, normalized []byte, current bool) (AccountsState, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return AccountsState{}, errors.New("账号名字不能为空")
 	}
 	i, err := s.read()
 	if err != nil {
@@ -144,6 +180,18 @@ func (s *Store) AddAccount(name, authJSON string) (AccountsState, error) {
 			return AccountsState{}, errors.New("已经存在同名账号")
 		}
 	}
+	if identity, identityErr := IdentifyAuth(normalized); identityErr == nil {
+		for _, account := range i.Accounts {
+			stored, readErr := os.ReadFile(s.authPath(account.ID))
+			if readErr != nil {
+				continue
+			}
+			storedIdentity, storedErr := IdentifyAuth(stored)
+			if storedErr == nil && identity.Equal(storedIdentity) {
+				return AccountsState{}, errors.New("该登录身份已经保存")
+			}
+		}
+	}
 	id := uuid.NewString()
 	now := s.now().UTC().Format(time.RFC3339Nano)
 	a := Account{ID: id, Name: name, CreatedAt: now, UpdatedAt: now}
@@ -151,7 +199,10 @@ func (s *Store) AddAccount(name, authJSON string) (AccountsState, error) {
 		return AccountsState{}, err
 	}
 	i.Accounts = append(i.Accounts, a)
-	if i.ActiveAccountID == nil {
+	if current {
+		i.ActiveAccountID = &id
+		err = s.save(i)
+	} else if i.ActiveAccountID == nil {
 		i.ActiveAccountID = &id
 		err = s.activateAndSave(i, normalized)
 	} else {
@@ -263,55 +314,91 @@ func (s *Store) activateAndSave(i index, auth []byte) error {
 	}
 	return nil
 }
-func (s *Store) UpdateAccountAuth(id string, confirmMismatch bool) (AuthUpdate, error) {
+
+// ReconcileTargetAuth safely associates the active Codex credential with one
+// stored account. It never writes TargetAuthPath.
+func (s *Store) ReconcileTargetAuth(auth []byte) (ReconcileResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	normalized, err := NormalizeAuth(auth)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	identity, err := IdentifyAuth(normalized)
+	if err != nil {
+		return ReconcileResult{Outcome: ReconcileIdentityMissing}, nil
+	}
 	i, err := s.read()
 	if err != nil {
-		return AuthUpdate{}, err
+		return ReconcileResult{}, err
 	}
-	pos := find(i, id)
-	if pos < 0 {
-		return AuthUpdate{}, errors.New("账号不存在")
+	type match struct {
+		pos       int
+		raw, auth []byte
 	}
-	old, err := os.ReadFile(s.authPath(id))
-	if err != nil {
-		return AuthUpdate{}, errors.New("无法读取账号中保存的 auth.json")
+	matches := make([]match, 0, 1)
+	for pos, account := range i.Accounts {
+		raw, readErr := os.ReadFile(s.authPath(account.ID))
+		if readErr != nil {
+			continue
+		}
+		stored, normalizeErr := NormalizeAuth(raw)
+		if normalizeErr != nil {
+			continue
+		}
+		storedIdentity, identityErr := IdentifyAuth(stored)
+		if identityErr == nil && identity.Equal(storedIdentity) {
+			matches = append(matches, match{pos: pos, raw: raw, auth: stored})
+		}
 	}
-	stored, err := NormalizeAuth(old)
-	if err != nil {
-		return AuthUpdate{}, err
+	if len(matches) == 0 {
+		return ReconcileResult{Outcome: ReconcileUnknown}, nil
 	}
-	current, err := os.ReadFile(s.TargetAuthPath)
-	if err != nil {
-		return AuthUpdate{}, errors.New("无法读取当前 ~/.codex/auth.json")
+	if len(matches) > 1 {
+		return ReconcileResult{Outcome: ReconcileAmbiguous}, nil
 	}
-	current, err = NormalizeAuth(current)
-	if err != nil {
-		return AuthUpdate{}, err
+	m := matches[0]
+	account := i.Accounts[m.pos]
+	accountID, accountName := account.ID, account.Name
+	result := ReconcileResult{Outcome: ReconcileUpToDate, AccountID: &accountID, AccountName: &accountName}
+	isActive := i.ActiveAccountID != nil && *i.ActiveAccountID == account.ID
+	authChanged := !bytes.Equal(m.auth, normalized)
+	if !authChanged && isActive {
+		return result, nil
 	}
-	r := AuthUpdate{StoredAccountID: AccountID(stored), CurrentAccountID: AccountID(current)}
-	match := r.StoredAccountID != nil && r.CurrentAccountID != nil && *r.StoredAccountID == *r.CurrentAccountID
-	if !match && !confirmMismatch {
-		return r, nil
+	if err = s.updateSavedAuthAndActive(&i, m.pos, m.raw, normalized, authChanged, !isActive); err != nil {
+		return ReconcileResult{}, err
 	}
-	if err = s.updateSavedAuth(&i, pos, old, current); err != nil {
-		return r, err
-	}
-	r.Updated = true
 	state := s.state(i)
-	r.State = &state
-	return r, nil
+	result.State = &state
+	if !isActive {
+		result.Outcome = ReconcileFollowed
+	} else {
+		result.Outcome = ReconcileSynced
+	}
+	return result, nil
 }
 func (s *Store) updateSavedAuth(i *index, pos int, old, updated []byte) error {
+	return s.updateSavedAuthAndActive(i, pos, old, updated, true, false)
+}
+
+func (s *Store) updateSavedAuthAndActive(i *index, pos int, old, updated []byte, updateAuth, setActive bool) error {
 	path := s.authPath(i.Accounts[pos].ID)
-	if err := s.write(path, updated, 0600); err != nil {
-		return err
+	if updateAuth {
+		if err := s.write(path, updated, 0600); err != nil {
+			return err
+		}
+		i.Accounts[pos].UpdatedAt = s.now().UTC().Format(time.RFC3339Nano)
 	}
-	i.Accounts[pos].UpdatedAt = s.now().UTC().Format(time.RFC3339Nano)
+	if setActive {
+		id := i.Accounts[pos].ID
+		i.ActiveAccountID = &id
+	}
 	if err := s.save(*i); err != nil {
-		if restore := s.write(path, old, 0600); restore != nil {
-			return fmt.Errorf("保存索引失败: %w；恢复原凭证失败: %v", err, restore)
+		if updateAuth {
+			if restore := s.write(path, old, 0600); restore != nil {
+				return fmt.Errorf("保存索引失败: %w；恢复原凭证失败: %v", err, restore)
+			}
 		}
 		return err
 	}
@@ -344,8 +431,9 @@ func (s *Store) PersistRefreshedAuth(id string, original, refreshed []byte) erro
 	if err != nil {
 		return err
 	}
-	a, b := AccountID(original), AccountID(normalized)
-	if a == nil || b == nil || *a != *b {
+	a, aErr := IdentifyAuth(original)
+	b, bErr := IdentifyAuth(normalized)
+	if aErr != nil || bErr != nil || !a.Equal(b) {
 		return errors.New("刷新后的认证身份无法确认，未覆盖已保存凭证")
 	}
 	i, err := s.read()
@@ -363,7 +451,28 @@ func (s *Store) PersistRefreshedAuth(id string, original, refreshed []byte) erro
 	if !bytes.Equal(current, original) {
 		return errors.New("账号凭证已更新，未覆盖新的凭证")
 	}
-	return s.updateSavedAuth(&i, pos, current, normalized)
+	active := i.ActiveAccountID != nil && *i.ActiveAccountID == id
+	if !active {
+		return s.updateSavedAuth(&i, pos, current, normalized)
+	}
+	target, err := os.ReadFile(s.TargetAuthPath)
+	if err != nil || !bytes.Equal(target, original) {
+		return errors.New("当前认证文件已更新，未覆盖新的凭证")
+	}
+	backup := filepath.Join(filepath.Dir(s.TargetAuthPath), BackupName)
+	if err = s.write(backup, target, 0600); err != nil {
+		return err
+	}
+	if err = s.write(s.TargetAuthPath, normalized, 0600); err != nil {
+		return err
+	}
+	if err = s.updateSavedAuth(&i, pos, current, normalized); err != nil {
+		if restore := s.write(s.TargetAuthPath, target, 0600); restore != nil {
+			return fmt.Errorf("%w；恢复当前凭证失败: %v", err, restore)
+		}
+		return err
+	}
+	return nil
 }
 func NormalizeAuth(raw []byte) ([]byte, error) {
 	var obj map[string]json.RawMessage
@@ -400,4 +509,84 @@ func AccountID(raw []byte) *string {
 		return nil
 	}
 	return &id
+}
+
+func IdentifyAuth(raw []byte) (CredentialIdentity, error) {
+	var v struct {
+		APIKey string `json:"OPENAI_API_KEY"`
+		Tokens struct {
+			AccountID   string `json:"account_id"`
+			IDToken     string `json:"id_token"`
+			AccessToken string `json:"access_token"`
+		} `json:"tokens"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return CredentialIdentity{}, errors.New("无法识别认证身份")
+	}
+	if key := strings.TrimSpace(v.APIKey); key != "" {
+		return CredentialIdentity{mode: "api_key", apiKeyHash: sha256.Sum256([]byte(key))}, nil
+	}
+	workspaceID := strings.TrimSpace(v.Tokens.AccountID)
+	var userID, tokenWorkspaceID string
+	for _, token := range []string{v.Tokens.IDToken, v.Tokens.AccessToken} {
+		user, workspace, ok := jwtIdentity(token)
+		if !ok {
+			continue
+		}
+		if userID != "" && user != "" && userID != user {
+			return CredentialIdentity{}, errors.New("认证 Token 的用户身份不一致")
+		}
+		if tokenWorkspaceID != "" && workspace != "" && tokenWorkspaceID != workspace {
+			return CredentialIdentity{}, errors.New("认证 Token 的工作空间不一致")
+		}
+		if userID == "" {
+			userID = user
+		}
+		if tokenWorkspaceID == "" {
+			tokenWorkspaceID = workspace
+		}
+	}
+	if workspaceID == "" {
+		workspaceID = tokenWorkspaceID
+	} else if tokenWorkspaceID != "" && workspaceID != tokenWorkspaceID {
+		return CredentialIdentity{}, errors.New("auth.json 的工作空间身份不一致")
+	}
+	if userID == "" || workspaceID == "" {
+		return CredentialIdentity{}, errors.New("auth.json 缺少可安全识别的用户或工作空间身份")
+	}
+	return CredentialIdentity{mode: "chatgpt", userID: userID, workspaceID: workspaceID}, nil
+}
+
+func jwtIdentity(token string) (string, string, bool) {
+	parts := strings.Split(strings.TrimSpace(token), ".")
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return "", "", false
+	}
+	var claims map[string]any
+	if json.Unmarshal(payload, &claims) != nil {
+		return "", "", false
+	}
+	auth, _ := claims["https://api.openai.com/auth"].(map[string]any)
+	user := firstClaim(auth, "chatgpt_user_id")
+	if user == "" {
+		user = firstClaim(claims, "chatgpt_user_id", "sub")
+	}
+	workspace := firstClaim(auth, "chatgpt_account_id", "chatgpt_workspace_id")
+	if workspace == "" {
+		workspace = firstClaim(claims, "chatgpt_account_id", "chatgpt_workspace_id")
+	}
+	return user, workspace, user != "" || workspace != ""
+}
+
+func firstClaim(claims map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := claims[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

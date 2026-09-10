@@ -5,7 +5,13 @@ import (
 	"switch-codex/internal/store"
 )
 
-func (s *AppService) showWindow() { s.window.Show(); s.window.Focus() }
+func (s *AppService) showWindow() {
+	s.window.Show()
+	s.window.Focus()
+	if s.authSync != nil {
+		s.authSync.Trigger(true)
+	}
+}
 func (s *AppService) switchFromMenu(id string) {
 	go func() {
 		if _, err := s.SwitchAccount(id); err != nil {

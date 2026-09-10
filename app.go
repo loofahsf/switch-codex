@@ -6,6 +6,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"os"
 	"path/filepath"
+	"switch-codex/internal/authsync"
 	"switch-codex/internal/scheduler"
 	"switch-codex/internal/store"
 	"switch-codex/internal/usage"
@@ -23,6 +24,7 @@ type AppService struct {
 	store          *store.Store
 	usage          *usage.Client
 	scheduler      *scheduler.Scheduler
+	authSync       *authsync.Service
 	home, priceDir string
 }
 type ChosenFile struct {
@@ -45,6 +47,7 @@ func (s *AppService) AddAccount(name, authJSON string) (store.AccountsState, err
 	state, err := s.store.AddAccount(name, authJSON)
 	if err == nil {
 		s.notify(state)
+		s.authSync.Trigger(true)
 	}
 	return state, err
 }
@@ -52,6 +55,7 @@ func (s *AppService) RemoveAccount(accountID string) (store.AccountsState, error
 	state, err := s.store.RemoveAccount(accountID)
 	if err == nil {
 		s.notify(state)
+		s.authSync.Trigger(true)
 	}
 	return state, err
 }
@@ -59,15 +63,19 @@ func (s *AppService) SwitchAccount(accountID string) (store.AccountsState, error
 	state, err := s.store.SwitchAccount(accountID)
 	if err == nil {
 		s.notify(state)
+		s.authSync.Trigger(true)
 	}
 	return state, err
 }
-func (s *AppService) UpdateAccountAuth(accountID string, confirmMismatch bool) (store.AuthUpdate, error) {
-	r, err := s.store.UpdateAccountAuth(accountID, confirmMismatch)
-	if err == nil && r.State != nil {
-		s.notify(*r.State)
+func (s *AppService) GetAuthSyncStatus() authsync.Status {
+	if s.authSync == nil {
+		return authsync.Status{Enabled: false, State: authsync.Disabled}
 	}
-	return r, err
+	return s.authSync.Status()
+}
+func (s *AppService) CheckAuthSyncNow() authsync.Status { return s.authSync.CheckNow() }
+func (s *AppService) AddPendingCurrentAccount(pendingID, name string) (store.AccountsState, error) {
+	return s.authSync.AddPendingCurrentAccount(pendingID, name)
 }
 func (s *AppService) GetUsageStats(days uint32, refreshPrices *bool) (usage.UsageStats, error) {
 	return s.usage.UsageStats(s.ctx, s.priceDir, filepath.Join(s.home, ".codex", "sessions"), days, refreshPrices != nil && *refreshPrices)
@@ -94,7 +102,11 @@ func (s *AppService) GetSettings() scheduler.Settings {
 }
 func (s *AppService) DetectCodexCLIPath() *string { return scheduler.DetectCLIPath() }
 func (s *AppService) SaveSettings(settings scheduler.Settings) (scheduler.Settings, error) {
-	return s.scheduler.Save(s.ctx, settings)
+	saved, err := s.scheduler.Save(s.ctx, settings)
+	if err == nil {
+		s.authSync.SetEnabled(saved.AutoSyncAuth)
+	}
+	return saved, err
 }
 func (s *AppService) GetScheduledRunStatus() scheduler.RunStatus {
 	if s.scheduler == nil {
@@ -154,6 +166,7 @@ func (s *AppService) batchFinished(ctx context.Context) {
 		return
 	}
 	s.notify(state)
+	s.authSync.Trigger(true)
 	quotas := s.usage.AccountQuotas(ctx, state)
 	if ctx.Err() == nil {
 		s.app.Event.Emit("scheduled-quotas-changed", quotas)

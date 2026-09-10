@@ -3,12 +3,26 @@ export interface Settings {
   enabled: boolean;
   time: string | null;
   cliPath: string | null;
+  autoSyncAuth: boolean;
+}
+export type AuthSyncState = 'disabled' | 'checking' | 'up_to_date' | 'synced' | 'followed'
+  | 'unknown' | 'ambiguous' | 'invalid' | 'missing' | 'error';
+export interface AuthSyncStatus {
+  enabled: boolean;
+  state: AuthSyncState;
+  accountId: string | null;
+  accountName: string | null;
+  checkedAt: string | null;
+  syncedAt: string | null;
+  pendingId: string | null;
+  message: string | null;
 }
 export type ScheduledAccountStatus = 'waiting' | 'running' | 'success' | 'failed' | 'interrupted';
 export interface ScheduledAccountResult {
   accountId: string;
   accountName: string;
   status: ScheduledAccountStatus;
+  scheduledAt: string | null;
   startedAt: string | null;
   finishedAt: string | null;
   message: string | null;
@@ -53,13 +67,6 @@ export interface ChosenFile {
   filePath: string;
   fileName: string;
   authJson: string;
-}
-
-export interface UpdateAccountAuthResponse {
-  updated: boolean;
-  storedAccountId: string | null;
-  currentAccountId: string | null;
-  state: AccountsState | null;
 }
 
 export interface RateLimitWindow {

@@ -4,15 +4,14 @@ import Sidebar from './components/Sidebar';
 import AccountsView from './views/AccountsView';
 import UsageView from './views/UsageView';
 import SettingsView from './views/SettingsView';
-import { formatAccountId } from './format';
 import { confirm, getErrorMessage, invoke, listen } from './platform';
 import type {
   AccountItem,
   AccountQuotas,
   AccountsState,
+  AuthSyncStatus,
   ChosenFile,
   InlineMessage,
-  UpdateAccountAuthResponse,
   UsageStats,
   ViewName
 } from './types';
@@ -25,6 +24,16 @@ const emptyState: AccountsState = {
 };
 
 const emptyMessage: InlineMessage = { text: '', type: 'neutral' };
+const emptyAuthSyncStatus: AuthSyncStatus = {
+  enabled: true,
+  state: 'checking',
+  accountId: null,
+  accountName: null,
+  checkedAt: null,
+  syncedAt: null,
+  pendingId: null,
+  message: '正在检查当前认证文件'
+};
 const sidebarStorageKey = 'switch-codex:sidebar-collapsed';
 
 interface RefreshUsageOptions {
@@ -54,6 +63,8 @@ export default function App() {
   const [view, setView] = useState<ViewName>('accounts');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarState);
   const [accountMessage, setAccountMessage] = useState<InlineMessage>(emptyMessage);
+  const [authSyncStatus, setAuthSyncStatus] = useState<AuthSyncStatus>(emptyAuthSyncStatus);
+  const [authSyncLoading, setAuthSyncLoading] = useState(false);
   const [usageMessage, setUsageMessage] = useState<InlineMessage>(emptyMessage);
   const [quotas, setQuotas] = useState<AccountQuotas | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(false);
@@ -70,6 +81,7 @@ export default function App() {
   const usageLoadingRef = useRef(false);
   const quotaLoadingRef = useRef(false);
   const refreshingQuotaAccountIdRef = useRef<string | null>(null);
+  const followedAtRef = useRef<string | null>(null);
 
   const updateQuotas = useCallback((nextQuotas: AccountQuotas | null) => {
     quotasRef.current = nextQuotas;
@@ -147,6 +159,16 @@ export default function App() {
         }
       });
 
+    invoke<AuthSyncStatus>('get_auth_sync_status')
+      .then((nextStatus) => {
+        if (!disposed) setAuthSyncStatus(nextStatus);
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setAccountMessage({ text: getErrorMessage(error, '读取自动同步状态失败'), type: 'error' });
+        }
+      });
+
     listen<AccountsState>('accounts-changed', (nextState) => {
       if (disposed) return;
       setState(nextState);
@@ -170,6 +192,20 @@ export default function App() {
       else unlisteners.push(unlisten);
     }).catch((error) => {
       console.error('Failed to listen for switch-error:', error);
+    });
+
+    listen<AuthSyncStatus>('auth-sync-changed', (nextStatus) => {
+      if (disposed) return;
+      setAuthSyncStatus(nextStatus);
+      if (nextStatus.state === 'followed' && nextStatus.checkedAt !== followedAtRef.current) {
+        followedAtRef.current = nextStatus.checkedAt;
+        void toast.success(nextStatus.message || '已跟随当前认证文件切换账号');
+      }
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    }).catch((error) => {
+      console.error('Failed to listen for auth-sync-changed:', error);
     });
 
     listen<AccountQuotas>('scheduled-quotas-changed', (nextQuotas) => {
@@ -248,40 +284,35 @@ export default function App() {
     }
   }
 
-  async function updateAccount(account: AccountItem) {
+  async function checkAuthSync() {
+    if (authSyncLoading) return;
+    setAuthSyncLoading(true);
     try {
-      let result = await invoke<UpdateAccountAuthResponse>('update_account_auth', {
-        accountId: account.id,
-        confirmMismatch: false
-      });
-
-      if (!result.updated) {
-        const confirmed = await confirm(
-          `当前 ~/.codex/auth.json 的 account_id（${formatAccountId(
-            result.currentAccountId
-          )}）与账号中保存的 account_id（${formatAccountId(
-            result.storedAccountId
-          )}）不一致。仍要覆盖吗？`,
-          { title: `确认更新「${account.name}」`, kind: 'warning' }
-        );
-        if (!confirmed) return;
-
-        result = await invoke<UpdateAccountAuthResponse>('update_account_auth', {
-          accountId: account.id,
-          confirmMismatch: true
-        });
-      }
-
-      if (result.updated && result.state) {
-        setState(result.state);
-        const text = `已用当前 ~/.codex/auth.json 更新「${account.name}」`;
-        setAccountMessage({ text, type: 'success' });
-        void toast.success(text);
-      }
+      setAuthSyncStatus(await invoke<AuthSyncStatus>('check_auth_sync_now'));
     } catch (error) {
-      const text = getErrorMessage(error, '更新认证文件失败');
+      const text = getErrorMessage(error, '检查认证文件失败');
       setAccountMessage({ text, type: 'error' });
       void toast.error(text);
+    } finally {
+      setAuthSyncLoading(false);
+    }
+  }
+
+  async function addPendingCurrentAccount(name: string): Promise<boolean> {
+    if (!authSyncStatus.pendingId) return false;
+    try {
+      const nextState = await invoke<AccountsState>('add_pending_current_account', {
+        pendingId: authSyncStatus.pendingId,
+        name
+      });
+      setState(nextState);
+      setAccountMessage({ text: '当前登录账号已保存', type: 'success' });
+      return true;
+    } catch (error) {
+      const text = getErrorMessage(error, '保存当前登录账号失败');
+      setAccountMessage({ text, type: 'error' });
+      void toast.error(text);
+      return false;
     }
   }
 
@@ -375,11 +406,14 @@ export default function App() {
           quotas={quotas}
           quotaLoading={quotaLoading}
           refreshingQuotaAccountId={refreshingQuotaAccountId}
+          authSyncStatus={authSyncStatus}
+          authSyncLoading={authSyncLoading}
           inlineMessage={accountMessage}
           onChooseFile={chooseAuthFile}
           onAddAccount={addAccount}
           onSwitchAccount={switchAccount}
-          onUpdateAccount={updateAccount}
+          onCheckAuthSync={checkAuthSync}
+          onAddPendingCurrentAccount={addPendingCurrentAccount}
           onRemoveAccount={removeAccount}
           onRefreshQuotas={refreshAccountQuotas}
           onRefreshAccountQuota={refreshAccountQuota}

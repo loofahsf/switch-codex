@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"switch-codex/internal/authsync"
 	"switch-codex/internal/platform"
 	"switch-codex/internal/scheduler"
 	"switch-codex/internal/store"
@@ -33,6 +34,7 @@ func init() {
 	application.RegisterEvent[string]("switch-error")
 	application.RegisterEvent[scheduler.RunStatus]("scheduled-run-changed")
 	application.RegisterEvent[usage.AccountQuotas]("scheduled-quotas-changed")
+	application.RegisterEvent[authsync.Status]("auth-sync-changed")
 }
 func main() {
 	home, err := os.UserHomeDir()
@@ -62,6 +64,13 @@ func main() {
 			svc.priceDir = filepath.Join(root, ".cache", "switch-codex")
 		}
 		svc.scheduler, initErr = scheduler.New(svc.store, scheduler.Options{Emit: func(event string, data any) { a.Event.Emit(event, data) }, BatchFinished: svc.batchFinished})
+		if initErr == nil {
+			svc.authSync = authsync.New(svc.store, authsync.Options{
+				Enabled:         svc.scheduler.Settings().AutoSyncAuth,
+				Emit:            func(status authsync.Status) { a.Event.Emit("auth-sync-changed", status) },
+				AccountsChanged: svc.notify,
+			})
+		}
 	}
 	if initErr != nil {
 		a.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(_ *application.ApplicationEvent) {
@@ -81,11 +90,20 @@ func main() {
 		state, _ := svc.store.ListAccounts()
 		svc.rebuildMenus(state)
 		a.Event.OnApplicationEvent(events.Common.SystemWillSleep, func(_ *application.ApplicationEvent) { svc.scheduler.Sleep() })
-		a.Event.OnApplicationEvent(events.Common.SystemDidWake, func(_ *application.ApplicationEvent) { svc.scheduler.Wake() })
-		a.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(_ *application.ApplicationEvent) { svc.scheduler.Start() })
+		a.Event.OnApplicationEvent(events.Common.SystemDidWake, func(_ *application.ApplicationEvent) {
+			svc.scheduler.Wake()
+			svc.authSync.Trigger(true)
+		})
+		a.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(_ *application.ApplicationEvent) {
+			svc.scheduler.Start()
+			svc.authSync.Start()
+		})
 	}
 	a.OnShutdown(func() {
 		cancel()
+		if svc.authSync != nil {
+			svc.authSync.Close()
+		}
 		if svc.scheduler != nil {
 			svc.scheduler.Close()
 		}

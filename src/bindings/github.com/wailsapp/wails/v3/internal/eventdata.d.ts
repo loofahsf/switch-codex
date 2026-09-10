@@ -7,6 +7,9 @@ import type { Events } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import type * as authsync$0 from "../../../../../switch-codex/internal/authsync/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import type * as scheduler$0 from "../../../../../switch-codex/internal/scheduler/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -19,6 +22,7 @@ declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
             "accounts-changed": store$0.AccountsState;
+            "auth-sync-changed": authsync$0.Status;
             "scheduled-quotas-changed": usage$0.AccountQuotas;
             "scheduled-run-changed": scheduler$0.RunStatus;
             "switch-error": string;

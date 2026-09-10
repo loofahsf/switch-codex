@@ -13,6 +13,9 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as authsync$0 from "./internal/authsync/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as scheduler$0 from "./internal/scheduler/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -27,6 +30,14 @@ import * as $models from "./models.js";
 
 export function AddAccount(name: string, authJSON: string): $CancellablePromise<store$0.AccountsState> {
     return $Call.ByID(2620387760, name, authJSON);
+}
+
+export function AddPendingCurrentAccount(pendingID: string, name: string): $CancellablePromise<store$0.AccountsState> {
+    return $Call.ByID(3136421524, pendingID, name);
+}
+
+export function CheckAuthSyncNow(): $CancellablePromise<authsync$0.Status> {
+    return $Call.ByID(4169648517);
 }
 
 export function ChooseAuthFile(): $CancellablePromise<$models.ChosenFile | null> {
@@ -47,6 +58,10 @@ export function GetAccountQuota(accountID: string): $CancellablePromise<usage$0.
 
 export function GetAccountQuotas(): $CancellablePromise<usage$0.AccountQuotas> {
     return $Call.ByID(1050610676);
+}
+
+export function GetAuthSyncStatus(): $CancellablePromise<authsync$0.Status> {
+    return $Call.ByID(3684857433);
 }
 
 export function GetScheduledRunStatus(): $CancellablePromise<scheduler$0.RunStatus> {
@@ -79,8 +94,4 @@ export function SaveSettings(settings: scheduler$0.Settings): $CancellablePromis
 
 export function SwitchAccount(accountID: string): $CancellablePromise<store$0.AccountsState> {
     return $Call.ByID(3806381117, accountID);
-}
-
-export function UpdateAccountAuth(accountID: string, confirmMismatch: boolean): $CancellablePromise<store$0.AuthUpdate> {
-    return $Call.ByID(4007396716, accountID, confirmMismatch);
 }

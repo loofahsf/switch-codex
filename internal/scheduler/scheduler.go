@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"switch-codex/internal/platform"
@@ -17,6 +18,8 @@ import (
 
 type Options struct {
 	Now                          func() time.Time
+	RandomIntn                   func(int) int
+	Wait                         func(context.Context, time.Duration) bool
 	Runner                       Runner
 	ResolveCLI                   func(*string) (string, error)
 	ValidateCLI                  func(context.Context, string) error
@@ -61,6 +64,12 @@ func New(st *store.Store, opts Options) (s *Scheduler, err error) {
 	if opts.Runner == nil {
 		opts.Runner = ProcessRunner{}
 	}
+	if opts.RandomIntn == nil {
+		opts.RandomIntn = rand.IntN
+	}
+	if opts.Wait == nil {
+		opts.Wait = wait
+	}
 	if opts.ResolveCLI == nil {
 		opts.ResolveCLI = ResolveCLI
 	}
@@ -78,14 +87,16 @@ func New(st *store.Store, opts Options) (s *Scheduler, err error) {
 	raw, readErr := os.ReadFile(s.path)
 	if readErr == nil {
 		if json.Unmarshal(raw, &s.saved) != nil || !validSaved(raw, s.saved) || s.saved.Settings.Validate() != nil {
-			s.saved = savedState{}
+			s.saved = savedState{Settings: Settings{AutoSyncAuth: true}}
 			s.error = ptr("设置文件损坏，定时调用已停用；请重新保存设置")
 		} else if s.saved.LastRun != nil && s.saved.LastRun.Accounts == nil {
 			// Old records may omit task details. Preserve the record while keeping
 			// the renderer contract that array fields are never null.
 			s.saved.LastRun.Accounts = []AccountResult{}
 		}
-	} else if !errors.Is(readErr, os.ErrNotExist) {
+	} else if errors.Is(readErr, os.ErrNotExist) {
+		s.saved.Settings.AutoSyncAuth = true
+	} else {
 		cancel()
 		return nil, errors.New("无法读取设置文件")
 	}
@@ -258,6 +269,7 @@ func (s *Scheduler) Tick() {
 		s.emit()
 		return
 	}
+	scheduledFor := *s.next
 	// Snapshot all credentials under the Store mutex before claiming the date.
 	snapshots, err := s.store.Snapshots()
 	if err != nil {
@@ -269,9 +281,15 @@ func (s *Scheduler) Tick() {
 	}
 	saved := clone(s.saved)
 	saved.LastRunDate = ptr(now.Format("2006-01-02"))
+	prompts := selectPrompts(len(snapshots), now, s.opts.RandomIntn)
+	tasks := make([]scheduledAccount, 0, len(snapshots))
 	saved.LastRun = &BatchResult{StartedAt: now.Format(time.RFC3339Nano), Accounts: make([]AccountResult, 0, len(snapshots))}
-	for _, a := range snapshots {
-		saved.LastRun.Accounts = append(saved.LastRun.Accounts, AccountResult{AccountID: a.ID, AccountName: a.Name, Status: Waiting, Response: ptr("")})
+	for i, a := range snapshots {
+		delay := MinAccountDelay + time.Duration(s.opts.RandomIntn(int((MaxAccountDelay-MinAccountDelay)/time.Second)+1))*time.Second
+		scheduledAt := scheduledFor.Add(delay)
+		prompt, scheduledStamp := prompts[i], scheduledAt.UTC().Format(time.RFC3339Nano)
+		saved.LastRun.Accounts = append(saved.LastRun.Accounts, AccountResult{AccountID: a.ID, AccountName: a.Name, Status: Waiting, ScheduledAt: ptr(scheduledStamp), Prompt: ptr(prompt), Response: ptr("")})
+		tasks = append(tasks, scheduledAccount{snapshot: a, index: i, prompt: prompt, scheduledAt: scheduledAt})
 	}
 	// A durable date claim must precede every external CLI invocation.
 	if err = s.persist(saved); err != nil {
@@ -289,13 +307,13 @@ func (s *Scheduler) Tick() {
 	s.wg.Add(1)
 	s.mu.Unlock()
 	s.emit()
-	go func() { defer s.wg.Done(); s.runBatch(snapshots, path) }()
+	go func() { defer s.wg.Done(); s.runBatch(tasks, path) }()
 }
-func (s *Scheduler) update(i int, status AccountStatus, message, response *string) {
+func (s *Scheduler) update(i int, status AccountStatus, message, response *string) bool {
 	s.mu.Lock()
 	if s.stopping {
 		s.mu.Unlock()
-		return
+		return false
 	}
 	a := &s.saved.LastRun.Accounts[i]
 	if status == Success && message == nil {
@@ -317,29 +335,79 @@ func (s *Scheduler) update(i int, status AccountStatus, message, response *strin
 	}
 	s.mu.Unlock()
 	s.emit()
+	return true
 }
-func (s *Scheduler) runBatch(accounts []store.Snapshot, path *string) {
+
+type scheduledAccount struct {
+	snapshot    store.Snapshot
+	index       int
+	prompt      string
+	scheduledAt time.Time
+}
+
+func selectPrompts(count int, date time.Time, randomIntn func(int) int) []string {
+	result := make([]string, 0, count)
+	for len(result) < count {
+		cycle := promptPool(date.Format("2006-01-02"))
+		for i := len(cycle) - 1; i > 0; i-- {
+			j := randomIntn(i + 1)
+			cycle[i], cycle[j] = cycle[j], cycle[i]
+		}
+		if len(result) > 0 && len(cycle) > 1 && result[len(result)-1] == cycle[0] {
+			cycle[0], cycle[1] = cycle[1], cycle[0]
+		}
+		remaining := count - len(result)
+		result = append(result, cycle[:min(remaining, len(cycle))]...)
+	}
+	return result
+}
+
+func wait(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (s *Scheduler) runBatch(accounts []scheduledAccount, path *string) {
 	cli, cliErr := s.opts.ResolveCLI(path)
 	if cliErr == nil {
 		cliErr = s.opts.ValidateCLI(s.ctx, cli)
 	}
-	for i, a := range accounts {
-		if s.ctx.Err() != nil {
-			return
+	if cliErr != nil {
+		for _, task := range accounts {
+			s.update(task.index, Failed, ptr(cliErr.Error()), nil)
 		}
-		s.update(i, Running, nil, nil)
-		if cliErr != nil {
-			s.update(i, Failed, ptr(cliErr.Error()), nil)
-			continue
+	} else {
+		var workers sync.WaitGroup
+		workers.Add(len(accounts))
+		for _, task := range accounts {
+			go func() {
+				defer workers.Done()
+				if !s.opts.Wait(s.ctx, task.scheduledAt.Sub(s.opts.Now())) {
+					return
+				}
+				if !s.update(task.index, Running, nil, nil) {
+					return
+				}
+				text, err := s.runAccount(cli, task.snapshot, task.index, task.prompt)
+				status := Success
+				var message *string
+				if err != nil {
+					status = Failed
+					message = ptr(err.Error())
+				}
+				s.update(task.index, status, message, &text)
+			}()
 		}
-		text, err := s.runAccount(cli, a, i)
-		status := Success
-		var message *string
-		if err != nil {
-			status = Failed
-			message = ptr(err.Error())
-		}
-		s.update(i, status, message, &text)
+		workers.Wait()
 	}
 	_ = os.RemoveAll(s.runtime)
 	s.mu.Lock()
@@ -358,7 +426,7 @@ func (s *Scheduler) runBatch(accounts []store.Snapshot, path *string) {
 		s.opts.BatchFinished(s.ctx)
 	}
 }
-func (s *Scheduler) runAccount(cli string, a store.Snapshot, i int) (string, error) {
+func (s *Scheduler) runAccount(cli string, a store.Snapshot, i int, prompt string) (string, error) {
 	original, err := a.Credentials()
 	if err != nil {
 		return "", err
@@ -381,19 +449,10 @@ func (s *Scheduler) runAccount(cli string, a store.Snapshot, i int) (string, err
 	if err = platform.WriteAtomic(filepath.Join(home, "auth.json"), normalized, 0600); err != nil {
 		return "", errors.New("无法准备临时认证文件")
 	}
-	s.mu.Lock()
-	if s.stopping {
-		s.mu.Unlock()
+	if s.ctx.Err() != nil {
 		return "", errors.New("任务已中断")
 	}
-	s.saved.LastRun.Accounts[i].Prompt = ptr(Prompt)
-	err = s.persist(s.saved)
-	s.mu.Unlock()
-	if err != nil {
-		return "", err
-	}
-	s.emit()
-	out, runErr := s.opts.Runner.Run(s.ctx, invocation(cli, home, work, Prompt), s.opts.AccountTimeout)
+	out, runErr := s.opts.Runner.Run(s.ctx, invocation(cli, home, work, prompt), s.opts.AccountTimeout)
 	// A refresh may succeed even when the model request fails or times out.
 	var warning error
 	refreshed, e := os.ReadFile(filepath.Join(home, "auth.json"))
