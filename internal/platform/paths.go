@@ -15,18 +15,27 @@ import (
 const AppIdentifier = "com.switchcodex.app"
 
 func DataDir(development bool, root, home, override string) (string, error) {
+	return dataDirForOS(runtime.GOOS, development, root, home, override, os.Getenv("LOCALAPPDATA"), os.Getenv("XDG_DATA_HOME"))
+}
+
+func dataDirForOS(goos string, development bool, root, home, override, localAppData, xdgDataHome string) (string, error) {
 	if override != "" {
 		return filepath.Abs(override)
 	}
 	if development {
 		return DevelopmentDataDir(root)
 	}
-	if runtime.GOOS == "windows" {
-		local := os.Getenv("LOCALAPPDATA")
-		if local == "" {
+	if goos == "windows" {
+		if localAppData == "" {
 			return "", errors.New("无法定位 LocalAppData")
 		}
-		return filepath.Join(local, AppIdentifier, "data"), nil
+		return filepath.Join(localAppData, AppIdentifier, "data"), nil
+	}
+	if goos == "linux" {
+		if xdgDataHome == "" {
+			xdgDataHome = filepath.Join(home, ".local", "share")
+		}
+		return filepath.Join(xdgDataHome, AppIdentifier, "data"), nil
 	}
 	return filepath.Join(home, "Library", "Application Support", AppIdentifier, "data"), nil
 }

@@ -53,7 +53,7 @@ func main() {
 	dataDir, initErr := platform.DataDir(development, root, home, override)
 	ctx, cancel := context.WithCancel(context.Background())
 	svc := &AppService{ctx: ctx, cancel: cancel, home: home, usage: usage.NewClient()}
-	a := application.New(application.Options{Name: "Switch Codex", Description: "Switch Codex " + appVersion, Icon: appIcon, Services: []application.Service{application.NewService(svc)}, Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)}, Mac: application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false}})
+	a := application.New(application.Options{Name: "Switch Codex", Description: "Switch Codex " + appVersion, Icon: appIcon, Services: []application.Service{application.NewService(svc)}, Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)}, Mac: application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false}, Linux: application.LinuxOptions{ProgramName: "switch-codex"}})
 	svc.app = a
 	w := a.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Switch Codex", Width: 960, Height: 640, MinWidth: 780, MinHeight: 560, BackgroundColour: application.NewRGB(244, 244, 245), Mac: application.MacWindow{TitleBar: application.MacTitleBarHiddenInset}, URL: "/"})
 	svc.window = w

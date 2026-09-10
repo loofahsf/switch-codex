@@ -1,6 +1,6 @@
 # Switch Codex
 
-Switch Codex 是一款基于 Wails v3 构建、以 macOS 优先的多 Codex `auth.json` 账号配置管理与快速切换桌面应用。
+Switch Codex 是一款基于 Wails v3 构建的多 Codex `auth.json` 账号配置管理与快速切换桌面应用，支持 macOS、Windows、Debian 和 Ubuntu。
 
 前端使用 TypeScript、React、Ant Design、AntV 和 Vite，核心账号、统计和调度逻辑由 Go 后端完成。Wails CLI 与运行时固定为 `v3.0.0-beta.18`。
 
@@ -46,21 +46,28 @@ npm run dev
 npm run build:mac:arm
 npm run build:mac:x64
 npm run build:win:x64
+npm run build:linux:x64
 ```
 
-安装包输出至 `release/`，中间产物位于 `bin/`。macOS 生成 DMG，Windows 生成 NSIS EXE，不再生成 MSI。
+安装包输出至 `release/`，中间产物位于 `bin/`。macOS 生成 DMG，Windows 生成 NSIS EXE，Linux 生成 amd64 DEB。
 
-Mac arm64 和 x64 安装包建议在 macOS 环境下构建。Windows x64 安装包可在 Windows 本地或通过 GitHub Actions 进行构建。
+Mac arm64 和 x64 安装包建议在 macOS 环境下构建。Windows x64 安装包可在 Windows 本地或通过 GitHub Actions 进行构建。Linux 包必须在 Ubuntu 24.04 上原生构建，并安装 `build-essential`、`pkg-config`、`libgtk-4-dev` 和 `libwebkitgtk-6.0-dev`。
+
+Debian 13 或 Ubuntu 24.04 及以上版本可使用 apt 安装 Release 中的包：
+
+```bash
+sudo apt install ./Switch-Codex-<version>-linux-amd64.deb
+```
 
 ## GitHub Actions
 
 - Pull Request 和分支推送会运行前端检查与桥接测试、Go 测试、`go vet`、核心包竞态检测、网页构建及 Wails 绑定同步检查。
 - `package.json` 是应用版本的唯一来源；修改版本后运行 `npm run version:sync` 生成 Go、macOS 和 Windows 元数据。
-- 推送至 `master` 或 `main`（或手动触发 Release workflow）会先验证并构建 macOS arm64、macOS x64、Windows x64 三个安装包。三者全部成功后才创建对应 Tag 和正式 Release。直接构建已有 Tag 时会校验该 Tag、版本和提交完全一致。
+- 推送至 `master` 或 `main`（或手动触发 Release workflow）会先验证并构建 macOS arm64、macOS x64、Windows x64、Linux x64 四个安装包。四者全部成功后才创建对应 Tag 和正式 Release。Linux 包还会在 Ubuntu 24.04 和 Debian 13 上执行安装与无头启动测试。直接构建已有 Tag 时会校验该 Tag、版本和提交完全一致。
 
 ## 数据存储路径
 
-开发模式的数据存储在项目 `data/`。正式版继续沿用旧版目录：macOS 为 `~/Library/Application Support/com.switchcodex.app/data`，Windows 为 `%LOCALAPPDATA%/com.switchcodex.app/data`。
+开发模式的数据存储在项目 `data/`。正式版继续沿用旧版目录：macOS 为 `~/Library/Application Support/com.switchcodex.app/data`，Windows 为 `%LOCALAPPDATA%/com.switchcodex.app/data`；Linux 为 `$XDG_DATA_HOME/com.switchcodex.app/data`，未设置 `XDG_DATA_HOME` 时使用 `~/.local/share/com.switchcodex.app/data`。
 
 目录格式保持不变：
 
@@ -75,7 +82,7 @@ data/
 
 ## 平台说明
 
-本项目支持 macOS 12 及以上版本（arm64、x64）和 Windows 10 及以上版本（x64）。核心文件替换、进程清理和文件锁分别提供 Unix/Windows 实现。
+本项目支持 macOS 12 及以上版本（arm64、x64）、Windows 10 及以上版本（x64），以及 Ubuntu 24.04 / Debian 13 及以上版本（x64）。Linux 使用系统提供的 GTK4 与 WebKitGTK 6.0；Linux 不启用托盘驻留，关闭主窗口会退出应用。核心文件替换、进程清理和文件锁分别提供 Unix/Windows 实现。
 
 ## 开源协议
 
@@ -92,7 +99,7 @@ data/
 - 各账号独立等待，到达计划时间后并行执行，不设置并发上限。每个账号实际启动后最多等待 120 秒，失败或超时不影响其他账号，也不自动重试；整批在全部账号结束后完成并刷新额度。
 - 页面显示最近一批账号的等待中、执行中、成功、失败或中断状态及计划、实际起止时间。点击账号整行（或键盘 Enter／空格）可打开详情弹窗，查看实际提示词、已收到的完整助手响应和错误信息；弹窗随状态更新。
 - 每个本地日期最多启动一批，修改时间不会重复运行当天已启动的任务。关闭功能或修改设置仅影响未来批次，正在执行的队列会继续。
-- 应用退出、电脑休眠期间错过的任务不补跑。macOS 关闭窗口后应用仍留在菜单栏运行；从菜单退出应用或 Windows 关闭窗口会终止任务，重启不恢复未完成队列。请保持电脑清醒并联网。
+- 应用退出、电脑休眠期间错过的任务不补跑。macOS 关闭窗口后应用仍留在菜单栏运行；从菜单退出应用或 Windows/Linux 关闭窗口会终止任务，重启不恢复未完成队列。请保持电脑清醒并联网。
 - 执行期间新增账号留待下次；删除或更新账号不改变本批快照，但会阻止旧任务覆盖已更新的凭证。
 
 内置任务涵盖简短问答、计算、写作、知识和生活建议，以及基于本地日期的通用今日安排。任务保持离线，不启用网页搜索，不会查询实时天气、当日新闻或个人日历。

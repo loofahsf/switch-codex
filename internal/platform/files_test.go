@@ -67,6 +67,40 @@ func TestLockAcrossProcesses(t *testing.T) {
 		t.Fatalf("lock not released: %v", e)
 	}
 }
+
+func TestDataDirPlatformPaths(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "workspace")
+	home := filepath.Join(base, "home", "tester")
+	xdg := filepath.Join(base, "data-home")
+	override := filepath.Join(base, "custom", "switch-codex")
+
+	got, err := dataDirForOS("linux", false, root, home, override, "", xdg)
+	if err != nil || got != override {
+		t.Fatalf("override path = %q, %v; want %q", got, err, override)
+	}
+	got, err = dataDirForOS("linux", false, root, home, "", "", xdg)
+	want := filepath.Join(xdg, AppIdentifier, "data")
+	if err != nil || got != want {
+		t.Fatalf("XDG path = %q, %v; want %q", got, err, want)
+	}
+	got, err = dataDirForOS("linux", false, root, home, "", "", "")
+	want = filepath.Join(home, ".local", "share", AppIdentifier, "data")
+	if err != nil || got != want {
+		t.Fatalf("default Linux path = %q, %v; want %q", got, err, want)
+	}
+	localAppData := filepath.Join(base, "LocalAppData")
+	got, err = dataDirForOS("windows", false, root, home, "", localAppData, "")
+	want = filepath.Join(localAppData, AppIdentifier, "data")
+	if err != nil || got != want {
+		t.Fatalf("Windows path = %q, %v; want %q", got, err, want)
+	}
+	got, err = dataDirForOS("darwin", false, root, home, "", "", "")
+	want = filepath.Join(home, "Library", "Application Support", AppIdentifier, "data")
+	if err != nil || got != want {
+		t.Fatalf("macOS path = %q, %v; want %q", got, err, want)
+	}
+}
 func legacyData(t *testing.T, root string) {
 	t.Helper()
 	for name, b := range map[string]string{"accounts.json": `{"activeAccountId":"a","accounts":[{"id":"a"}]}`, "accounts/a/auth.json": `{"tokens":{"refresh_token":"synthetic"}}`, "settings.json": `{"settings":{"enabled":false}}`} {

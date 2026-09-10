@@ -1,0 +1,29 @@
+name: switch-codex
+arch: ${GOARCH}
+platform: linux
+version: ${APP_VERSION}
+release: "1"
+section: utils
+priority: optional
+maintainer: Switch Codex <loofahsf@users.noreply.github.com>
+description: Manage and quickly switch multiple Codex auth.json accounts.
+vendor: Switch Codex
+homepage: https://github.com/loofahsf/switch-codex
+license: MIT
+
+contents:
+  - src: ${LINUX_BINARY}
+    dst: /usr/bin/switch-codex
+    expand: true
+    file_info:
+      mode: 0755
+  - src: ./build/appicon.png
+    dst: /usr/share/icons/hicolor/256x256/apps/switch-codex.png
+  - src: ./build/linux/switch-codex.desktop
+    dst: /usr/share/applications/switch-codex.desktop
+  - src: ./LICENSE
+    dst: /usr/share/doc/switch-codex/copyright
+
+depends:
+  - libgtk-4-1
+  - libwebkitgtk-6.0-4

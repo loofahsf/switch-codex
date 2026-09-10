@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Switch Codex
+Comment=Manage and quickly switch multiple Codex accounts
+Exec=/usr/bin/switch-codex
+Icon=switch-codex
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=switch-codex

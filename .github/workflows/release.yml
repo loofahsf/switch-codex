@@ -79,6 +79,9 @@ jobs:
           - name: win-x64
             os: windows-latest
             script: build:win:x64
+          - name: linux-x64
+            os: ubuntu-24.04
+            script: build:linux:x64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -110,8 +113,67 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install nsis --no-progress -y
 
+      - name: Install Wails Linux build and smoke-test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev desktop-file-utils xvfb xauth dbus-x11
+
       - name: Build production package
         run: npm run ${{ matrix.script }}
+
+      - name: Validate Linux package metadata and contents
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          PACKAGE=$(find release -maxdepth 1 -name 'Switch-Codex-*-linux-amd64.deb' -print -quit)
+          test -n "$PACKAGE"
+          test "$(dpkg-deb -f "$PACKAGE" Package)" = "switch-codex"
+          test "$(dpkg-deb -f "$PACKAGE" Architecture)" = "amd64"
+          test "$(dpkg-deb -f "$PACKAGE" Version)" = "$(node -p "require('./package.json').version")-1"
+          DEPENDS=$(dpkg-deb -f "$PACKAGE" Depends)
+          [[ "$DEPENDS" == *"libgtk-4-1"* ]]
+          [[ "$DEPENDS" == *"libwebkitgtk-6.0-4"* ]]
+          desktop-file-validate build/linux/switch-codex.desktop
+          dpkg-deb -c "$PACKAGE" > /tmp/switch-codex-package-contents.txt
+          grep -q './usr/bin/switch-codex' /tmp/switch-codex-package-contents.txt
+          grep -q './usr/share/applications/switch-codex.desktop' /tmp/switch-codex-package-contents.txt
+          grep -q './usr/share/icons/hicolor/256x256/apps/switch-codex.png' /tmp/switch-codex-package-contents.txt
+
+      - name: Smoke test Linux package on Ubuntu 24.04
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          PACKAGE=$(find release -maxdepth 1 -name 'Switch-Codex-*-linux-amd64.deb' -print -quit)
+          sudo apt-get install --no-install-recommends -y "$PWD/$PACKAGE"
+          SMOKE_DATA=$(mktemp -d)
+          set +e
+          CODEX_SWITCH_DATA_DIR="$SMOKE_DATA" timeout 15s dbus-run-session -- xvfb-run -a /usr/bin/switch-codex > /tmp/switch-codex-ubuntu-smoke.log 2>&1
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 124 ]; then
+            cat /tmp/switch-codex-ubuntu-smoke.log
+            exit 1
+          fi
+
+      - name: Smoke test Linux package on Debian 13
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          PACKAGE=$(find release -maxdepth 1 -name 'Switch-Codex-*-linux-amd64.deb' -print -quit)
+          docker run --rm -e PACKAGE_PATH="/workspace/$PACKAGE" -v "$PWD:/workspace:ro" debian:13-slim bash -lc '
+            apt-get update
+            apt-get install --no-install-recommends -y "$PACKAGE_PATH" xvfb xauth dbus-x11
+            mkdir -p /tmp/switch-codex-data
+            set +e
+            CODEX_SWITCH_DATA_DIR=/tmp/switch-codex-data timeout 15s dbus-run-session -- xvfb-run -a /usr/bin/switch-codex > /tmp/switch-codex-debian-smoke.log 2>&1
+            STATUS=$?
+            set -e
+            if [ "$STATUS" -ne 124 ]; then
+              cat /tmp/switch-codex-debian-smoke.log
+              exit 1
+            fi
+          '
 
       - name: Upload package
         id: upload-package
