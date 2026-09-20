@@ -2,14 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const names = ['ListAccounts', 'AddAccount', 'RemoveAccount', 'SwitchAccount', 'GetAuthSyncStatus',
   'CheckAuthSyncNow', 'AddPendingCurrentAccount',
-  'ChooseAuthFile', 'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'WarmupAccount', 'WarmupAllAccounts', 'GetSettings',
+  'ChooseAuthFile', 'ChooseAccountsBackup', 'ExportAccountsBackup', 'ImportAccountsBackup',
+  'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'WarmupAccount', 'WarmupAllAccounts', 'GetSettings',
   'DetectCodexCLIPath', 'SaveSettings', 'GetScheduledRunStatus', 'OpenURL', 'Confirm'];
 const mocks = vi.hoisted(() => ({ calls: {} as Record<string, ReturnType<typeof vi.fn>>, on: vi.fn() }));
 vi.mock('@wailsio/runtime', () => ({ Events: { On: mocks.on } }));
 vi.mock('./bindings/switch-codex/appservice', () => Object.fromEntries([
   'ListAccounts', 'AddAccount', 'RemoveAccount', 'SwitchAccount', 'GetAuthSyncStatus',
   'CheckAuthSyncNow', 'AddPendingCurrentAccount',
-  'ChooseAuthFile', 'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'WarmupAccount', 'WarmupAllAccounts', 'GetSettings',
+  'ChooseAuthFile', 'ChooseAccountsBackup', 'ExportAccountsBackup', 'ImportAccountsBackup',
+  'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'WarmupAccount', 'WarmupAllAccounts', 'GetSettings',
   'DetectCodexCLIPath', 'SaveSettings', 'GetScheduledRunStatus', 'OpenURL', 'Confirm'
 ].map((name) => [name, mocks.calls[name] = vi.fn().mockResolvedValue(null)])));
 import { confirm, getErrorMessage, invoke, listen } from './platform';
@@ -26,6 +28,9 @@ describe('desktop command contract', () => {
     ['check_auth_sync_now', {}, 'CheckAuthSyncNow', []],
     ['add_pending_current_account', { pendingId: 'pending', name: 'work' }, 'AddPendingCurrentAccount', ['pending', 'work']],
     ['choose_auth_file', {}, 'ChooseAuthFile', []],
+    ['choose_accounts_backup', {}, 'ChooseAccountsBackup', []],
+    ['export_accounts_backup', { passphrase: 'password' }, 'ExportAccountsBackup', ['password']],
+    ['import_accounts_backup', { path: '/tmp/accounts.scbackup', passphrase: 'password' }, 'ImportAccountsBackup', ['/tmp/accounts.scbackup', 'password']],
     ['get_usage_stats', { days: 30, refreshPrices: true }, 'GetUsageStats', [30, true]],
     ['get_usage_stats', { days: 0 }, 'GetUsageStats', [0, null]],
     ['get_account_quotas', {}, 'GetAccountQuotas', []],

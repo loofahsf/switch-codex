@@ -7,6 +7,9 @@ export {
 };
 
 export type {
+    BackupTransferResult,
+    ChosenBackupFile,
     ChosenFile,
-    ConfirmOptions
+    ConfirmOptions,
+    ImportAccountsResult
 } from "./models.js";

@@ -159,6 +159,24 @@ func (s *Scheduler) Settings() Settings {
 	defer s.mu.Unlock()
 	return clone(s.saved.Settings)
 }
+
+// SetAutoSyncAuth persists only the authentication-sync preference. It avoids
+// revalidating machine-specific CLI configuration when account import needs to
+// disable sync without changing the scheduled task.
+func (s *Scheduler) SetAutoSyncAuth(enabled bool) (Settings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping {
+		return Settings{}, errors.New("应用正在退出")
+	}
+	saved := clone(s.saved)
+	saved.Settings.AutoSyncAuth = enabled
+	if err := s.persist(saved); err != nil {
+		return Settings{}, err
+	}
+	s.saved = saved
+	return clone(saved.Settings), nil
+}
 func (s *Scheduler) Status() RunStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()

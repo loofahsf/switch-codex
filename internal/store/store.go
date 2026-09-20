@@ -95,6 +95,9 @@ func (s *Store) EnsureReady() error {
 	if err := os.MkdirAll(filepath.Join(s.DataDir, "accounts"), 0700); err != nil {
 		return err
 	}
+	if err := s.recoverPendingImport(); err != nil {
+		return err
+	}
 	if _, err := os.Stat(s.indexPath()); errors.Is(err, os.ErrNotExist) {
 		return s.save(index{Accounts: []Account{}})
 	} else if err != nil {
@@ -136,11 +139,11 @@ func (s *Store) read() (index, error) {
 	return i, nil
 }
 func (s *Store) save(i index) error {
-	b, err := json.MarshalIndent(i, "", "  ")
+	b, err := marshalIndex(i)
 	if err != nil {
 		return err
 	}
-	return s.write(s.indexPath(), append(b, '\n'), 0600)
+	return s.write(s.indexPath(), b, 0600)
 }
 func (s *Store) state(i index) AccountsState {
 	items := make([]AccountItem, 0, len(i.Accounts))

@@ -40,6 +40,10 @@ export function CheckAuthSyncNow(): $CancellablePromise<authsync$0.Status> {
     return $Call.ByID(4169648517);
 }
 
+export function ChooseAccountsBackup(): $CancellablePromise<$models.ChosenBackupFile | null> {
+    return $Call.ByID(4001967341);
+}
+
 export function ChooseAuthFile(): $CancellablePromise<$models.ChosenFile | null> {
     return $Call.ByID(1761100787);
 }
@@ -50,6 +54,10 @@ export function Confirm(message: string, options: $models.ConfirmOptions): $Canc
 
 export function DetectCodexCLIPath(): $CancellablePromise<string | null> {
     return $Call.ByID(2773836229);
+}
+
+export function ExportAccountsBackup(passphrase: string): $CancellablePromise<$models.BackupTransferResult | null> {
+    return $Call.ByID(3729999282, passphrase);
 }
 
 export function GetAccountQuota(accountID: string): $CancellablePromise<usage$0.AccountQuotas> {
@@ -74,6 +82,10 @@ export function GetSettings(): $CancellablePromise<scheduler$0.Settings> {
 
 export function GetUsageStats(days: number, refreshPrices: boolean | null): $CancellablePromise<usage$0.UsageStats> {
     return $Call.ByID(2626047168, days, refreshPrices);
+}
+
+export function ImportAccountsBackup(path: string, passphrase: string): $CancellablePromise<$models.ImportAccountsResult> {
+    return $Call.ByID(3459483073, path, passphrase);
 }
 
 export function ListAccounts(): $CancellablePromise<store$0.AccountsState> {

@@ -3,10 +3,17 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/wailsapp/wails/v3/pkg/application"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+
 	"switch-codex/internal/authsync"
+	"switch-codex/internal/platform"
 	"switch-codex/internal/scheduler"
 	"switch-codex/internal/store"
 	"switch-codex/internal/usage"
@@ -32,6 +39,20 @@ type ChosenFile struct {
 	FilePath string `json:"filePath"`
 	FileName string `json:"fileName"`
 	AuthJSON string `json:"authJson"`
+}
+type ChosenBackupFile struct {
+	FilePath string `json:"filePath"`
+	FileName string `json:"fileName"`
+}
+type BackupTransferResult struct {
+	FilePath     string `json:"filePath"`
+	FileName     string `json:"fileName"`
+	AccountCount int    `json:"accountCount"`
+}
+type ImportAccountsResult struct {
+	State            store.AccountsState `json:"state"`
+	AccountCount     int                 `json:"accountCount"`
+	AutoSyncDisabled bool                `json:"autoSyncDisabled"`
 }
 type ConfirmOptions struct {
 	Title string `json:"title"`
@@ -151,6 +172,125 @@ func (s *AppService) ChooseAuthFile() (*ChosenFile, error) {
 		return nil, errors.New("读取文件失败")
 	}
 	return &ChosenFile{FilePath: path, FileName: filepath.Base(path), AuthJSON: string(b)}, nil
+}
+func (s *AppService) ChooseAccountsBackup() (*ChosenBackupFile, error) {
+	if s.store == nil {
+		return nil, errors.New("账号存储尚未就绪")
+	}
+	state, err := s.store.ListAccounts()
+	if err != nil {
+		return nil, err
+	}
+	if len(state.Accounts) != 0 {
+		return nil, errors.New("仅允许导入到没有账号的目标库")
+	}
+	d := s.app.Dialog.OpenFile().SetTitle("选择 Switch Codex 账号备份").
+		AddFilter("Switch Codex 账号备份", "*"+store.BackupExtension).
+		CanChooseFiles(true).CanChooseDirectories(false).AttachToWindow(s.window)
+	path, err := d.PromptForSingleSelection()
+	if err != nil {
+		return nil, err
+	}
+	if path == "" {
+		return nil, nil
+	}
+	return &ChosenBackupFile{FilePath: path, FileName: filepath.Base(path)}, nil
+}
+
+func (s *AppService) ExportAccountsBackup(passphrase string) (*BackupTransferResult, error) {
+	if s.store == nil {
+		return nil, errors.New("账号存储尚未就绪")
+	}
+	contents, count, err := s.store.CreateAccountsBackup(passphrase, appVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		for i := range contents {
+			contents[i] = 0
+		}
+	}()
+	filename := "switch-codex-accounts-" + time.Now().Format("20060102-150405") + store.BackupExtension
+	d := s.app.Dialog.SaveFile().SetFilename(filename).
+		AddFilter("Switch Codex 账号备份", "*"+store.BackupExtension).
+		CanCreateDirectories(true).AttachToWindow(s.window)
+	path, err := d.PromptForSingleSelection()
+	if err != nil {
+		return nil, err
+	}
+	if path == "" {
+		return nil, nil
+	}
+	if !strings.EqualFold(filepath.Ext(path), store.BackupExtension) {
+		path += store.BackupExtension
+	}
+	if err = platform.WriteAtomic(path, contents, 0600); err != nil {
+		return nil, errors.New("无法写入账号备份文件")
+	}
+	return &BackupTransferResult{FilePath: path, FileName: filepath.Base(path), AccountCount: count}, nil
+}
+
+func (s *AppService) ImportAccountsBackup(path, passphrase string) (ImportAccountsResult, error) {
+	if s.store == nil || s.scheduler == nil || s.authSync == nil {
+		return ImportAccountsResult{}, errors.New("账号存储尚未就绪")
+	}
+	contents, err := readBackupFile(path)
+	if err != nil {
+		return ImportAccountsResult{}, err
+	}
+	defer func() {
+		for i := range contents {
+			contents[i] = 0
+		}
+	}()
+	backup, err := store.DecodeAccountsBackup(contents, passphrase)
+	if err != nil {
+		return ImportAccountsResult{}, err
+	}
+	defer backup.Clear()
+	previousSync := s.scheduler.Settings().AutoSyncAuth
+	s.authSync.SetEnabled(false)
+	if previousSync {
+		if _, err = s.scheduler.SetAutoSyncAuth(false); err != nil {
+			s.authSync.SetEnabled(true)
+			return ImportAccountsResult{}, errors.New("无法在导入前关闭认证文件自动同步")
+		}
+	}
+	state, err := s.store.ImportAccountsBackup(backup)
+	if err != nil {
+		if previousSync {
+			if _, restoreErr := s.scheduler.SetAutoSyncAuth(true); restoreErr != nil {
+				return ImportAccountsResult{}, fmt.Errorf("%w；恢复认证文件自动同步失败: %v", err, restoreErr)
+			}
+			s.authSync.SetEnabled(true)
+		}
+		return ImportAccountsResult{}, err
+	}
+	s.notify(state)
+	return ImportAccountsResult{State: state, AccountCount: backup.AccountCount(), AutoSyncDisabled: true}, nil
+}
+
+func readBackupFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, errors.New("无法读取账号备份文件")
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("账号备份不是普通文件")
+	}
+	if info.Size() > store.MaxBackupBytes {
+		return nil, errors.New("账号备份超过 64 MiB 安全限制")
+	}
+	contents, err := io.ReadAll(io.LimitReader(f, store.MaxBackupBytes+1))
+	if err != nil {
+		return nil, errors.New("无法读取账号备份文件")
+	}
+	if len(contents) > store.MaxBackupBytes {
+		return nil, errors.New("账号备份超过 64 MiB 安全限制")
+	}
+	return contents, nil
 }
 func isDir(path string) bool { info, err := os.Stat(path); return err == nil && info.IsDir() }
 func (s *AppService) Confirm(message string, options ConfirmOptions) (bool, error) {

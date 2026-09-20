@@ -143,6 +143,37 @@ func TestSettingsCompatibility(t *testing.T) {
 		t.Fatal("explicit autoSyncAuth=false was not preserved")
 	}
 }
+
+func TestSetAutoSyncAuthPreservesScheduleAndHistory(t *testing.T) {
+	s, _ := newTestScheduler(t, nil, 0)
+	schedule := "23:59:00"
+	cli := "/machine-specific/codex"
+	s.saved = savedState{
+		Settings:    Settings{Enabled: true, Time: &schedule, CLIPath: &cli, AutoSyncAuth: true},
+		LastRunDate: ptr("2026-09-19"),
+		LastRun:     &BatchResult{StartedAt: "2026-09-19T23:59:00Z", Accounts: []AccountResult{}},
+	}
+	beforeStatus := clone(s.saved)
+	settings, err := s.SetAutoSyncAuth(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.AutoSyncAuth || !settings.Enabled || settings.Time == nil || *settings.Time != schedule || settings.CLIPath == nil || *settings.CLIPath != cli {
+		t.Fatalf("settings changed unexpectedly: %+v", settings)
+	}
+	if s.saved.LastRunDate == nil || *s.saved.LastRunDate != *beforeStatus.LastRunDate || s.saved.LastRun == nil || s.saved.LastRun.StartedAt != beforeStatus.LastRun.StartedAt {
+		t.Fatalf("history changed unexpectedly: %+v", s.saved)
+	}
+	s.Close()
+	restarted, err := New(s.store, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if restarted.Settings().AutoSyncAuth {
+		t.Fatal("auto sync preference was not persisted")
+	}
+}
 func TestGraceSleepTimezoneAndDailyClaim(t *testing.T) {
 	for _, tc := range []struct {
 		name              string

@@ -7,10 +7,20 @@ import TimePicker from 'antd/es/time-picker';
 import Modal from 'antd/es/modal';
 import dayjs from 'dayjs';
 import { getErrorMessage, invoke, listen } from '../platform';
-import type { AuthSyncStatus, ScheduledAccountResult, ScheduledAccountStatus, ScheduledRunStatus, Settings } from '../types';
+import type {
+  AuthSyncStatus,
+  BackupTransferResult,
+  ChosenBackupFile,
+  ImportAccountsResult,
+  ScheduledAccountResult,
+  ScheduledAccountStatus,
+  ScheduledRunStatus,
+  Settings
+} from '../types';
 
 interface SettingsViewProps {
   active: boolean;
+  accountCount: number;
   authSyncStatus: AuthSyncStatus;
   authSyncLoading: boolean;
   onCheckAuthSync: () => Promise<void>;
@@ -47,6 +57,7 @@ function timingText(account: ScheduledAccountResult): string {
 
 export default function SettingsView({
   active,
+  accountCount,
   authSyncStatus,
   authSyncLoading,
   onCheckAuthSync,
@@ -65,6 +76,13 @@ export default function SettingsView({
   const [pendingName, setPendingName] = useState('');
   const [savingPending, setSavingPending] = useState(false);
   const [selected, setSelected] = useState<{ batchStartedAt: string; accountId: string } | null>(null);
+  const [backupMode, setBackupMode] = useState<'export' | 'import' | null>(null);
+  const [chosenBackup, setChosenBackup] = useState<ChosenBackupFile | null>(null);
+  const [backupPassword, setBackupPassword] = useState('');
+  const [backupConfirmation, setBackupConfirmation] = useState('');
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupMessage, setBackupMessage] = useState('');
+  const [backupError, setBackupError] = useState('');
   const needsAutoPath = !settings.cliPath?.trim();
 
   useEffect(() => {
@@ -145,6 +163,86 @@ export default function SettingsView({
       }
     } finally {
       setSavingPending(false);
+    }
+  }
+
+  function closeBackupDialog() {
+    if (backupBusy) return;
+    setBackupMode(null);
+    setChosenBackup(null);
+    setBackupPassword('');
+    setBackupConfirmation('');
+    setBackupError('');
+  }
+
+  function validateBackupPassword(confirm: boolean): string | null {
+    if (Array.from(backupPassword).length < 8) return '备份密码至少需要 8 个字符';
+    if (new TextEncoder().encode(backupPassword).length > 1024) return '备份密码不能超过 1024 字节';
+    if (confirm && backupPassword !== backupConfirmation) return '两次输入的备份密码不一致';
+    return null;
+  }
+
+  function beginExport() {
+    setBackupMessage('');
+    setBackupError('');
+    setChosenBackup(null);
+    setBackupPassword('');
+    setBackupConfirmation('');
+    setBackupMode('export');
+  }
+
+  async function beginImport() {
+    setBackupMessage('');
+    setBackupError('');
+    try {
+      const chosen = await invoke<ChosenBackupFile | null>('choose_accounts_backup');
+      if (!chosen) return;
+      setChosenBackup(chosen);
+      setBackupPassword('');
+      setBackupConfirmation('');
+      setBackupMode('import');
+    } catch (reason) {
+      setBackupError(getErrorMessage(reason, '选择账号备份失败'));
+    }
+  }
+
+  async function submitBackupOperation() {
+    const validationError = validateBackupPassword(backupMode === 'export');
+    if (validationError) {
+      setBackupError(validationError);
+      return;
+    }
+    if (!backupMode || (backupMode === 'import' && !chosenBackup)) return;
+    setBackupBusy(true);
+    setBackupError('');
+    try {
+      if (backupMode === 'export') {
+        const result = await invoke<BackupTransferResult | null>('export_accounts_backup', { passphrase: backupPassword });
+        if (!result) {
+          setBackupMode(null);
+          setChosenBackup(null);
+          setBackupPassword('');
+          setBackupConfirmation('');
+          return;
+        }
+        setBackupMessage(`已加密导出 ${result.accountCount} 个账号到 ${result.fileName}`);
+      } else {
+        const result = await invoke<ImportAccountsResult>('import_accounts_backup', {
+          path: chosenBackup?.filePath,
+          passphrase: backupPassword
+        });
+        setSettings((value) => ({ ...value, autoSyncAuth: false }));
+        setSaved((value) => value ? ({ ...value, autoSyncAuth: false }) : value);
+        setBackupMessage(`已导入 ${result.accountCount} 个账号；自动同步已关闭，请到账号管理手动选择账号。`);
+      }
+      setBackupMode(null);
+      setChosenBackup(null);
+      setBackupPassword('');
+      setBackupConfirmation('');
+    } catch (reason) {
+      setBackupError(getErrorMessage(reason, backupMode === 'export' ? '导出账号失败' : '导入账号失败'));
+    } finally {
+      setBackupBusy(false);
     }
   }
 
@@ -279,6 +377,23 @@ export default function SettingsView({
           {error && <p role="alert" className="settings-error">{error}</p>}
           {status?.error && <p role="alert" className="settings-error">{status.error}</p>}
         </form>
+        <section className="panel settings-panel" aria-label="账号备份与恢复">
+          <div className="panel-heading settings-heading">
+            <div>
+              <h2>账号备份与恢复</h2>
+              <span>使用密码加密迁移全部已保存账号。</span>
+            </div>
+            <Tag color={accountCount ? 'processing' : 'default'}>{accountCount} 个账号</Tag>
+          </div>
+          <p className="settings-help">备份包含账号名称、时间和完整认证凭据，不包含定时设置、CLI 路径、运行历史、配额缓存或本地用量。</p>
+          <p className="settings-help">导入仅支持空账号库，不会修改本机 ~/.codex/auth.json，也不会恢复源电脑的激活账号。导入成功后会关闭认证文件自动同步。</p>
+          <div className="backup-actions">
+            <Button type="primary" disabled={accountCount === 0 || backupBusy} onClick={beginExport}>导出账号</Button>
+            <Button disabled={accountCount !== 0 || backupBusy} onClick={() => void beginImport()}>导入账号</Button>
+          </div>
+          {backupMessage && <p role="status" className="settings-success backup-result">{backupMessage}</p>}
+          {backupError && !backupMode && <p role="alert" className="settings-error">{backupError}</p>}
+        </section>
         <section className="panel settings-panel" aria-label="最近一次任务">
           <div className="panel-heading settings-heading">
             <div>
@@ -307,6 +422,53 @@ export default function SettingsView({
           </> : <p className="settings-help">启用并保存后，任务会在设定时间自动执行。</p>}
         </section>
       </div>
+      <Modal
+        title={backupMode === 'export' ? '加密导出账号' : '解密导入账号'}
+        open={backupMode !== null}
+        confirmLoading={backupBusy}
+        okText={backupMode === 'export' ? '选择位置并导出' : '导入账号'}
+        cancelText="取消"
+        okButtonProps={{ disabled: !backupPassword || (backupMode === 'export' && !backupConfirmation) }}
+        closable={!backupBusy}
+        mask={{ closable: !backupBusy }}
+        onCancel={closeBackupDialog}
+        onOk={() => void submitBackupOperation()}
+      >
+        <div className="backup-dialog-fields">
+          {backupMode === 'import' && chosenBackup ? (
+            <p className="settings-help">已选择：{chosenBackup.fileName}</p>
+          ) : null}
+          <label className="field">
+            <span>备份密码</span>
+            <Input.Password
+              aria-label="备份密码"
+              autoComplete={backupMode === 'export' ? 'new-password' : 'current-password'}
+              value={backupPassword}
+              disabled={backupBusy}
+              placeholder="至少 8 个字符"
+              onChange={(event) => { setBackupPassword(event.target.value); setBackupError(''); }}
+              onPressEnter={() => void submitBackupOperation()}
+            />
+          </label>
+          {backupMode === 'export' ? (
+            <label className="field">
+              <span>确认备份密码</span>
+              <Input.Password
+                aria-label="确认备份密码"
+                autoComplete="new-password"
+                value={backupConfirmation}
+                disabled={backupBusy}
+                placeholder="再次输入密码"
+                onChange={(event) => { setBackupConfirmation(event.target.value); setBackupError(''); }}
+                onPressEnter={() => void submitBackupOperation()}
+              />
+            </label>
+          ) : (
+            <p className="settings-help">导入后自动同步将关闭，当前 auth.json 保持不变。密码无法找回。</p>
+          )}
+          {backupError && <p role="alert" className="settings-error">{backupError}</p>}
+        </div>
+      </Modal>
       <Modal
         title={selectedAccount ? `${selectedAccount.accountName} · 调用详情` : '调用详情'}
         open={Boolean(selectedAccount)} onCancel={() => setSelected(null)} footer={null} width={720}

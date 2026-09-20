@@ -449,6 +449,7 @@ export default function App() {
       <section className="workspace">
         <SettingsView
           active={view === 'settings'}
+          accountCount={state.accounts.length}
           authSyncStatus={authSyncStatus}
           authSyncLoading={authSyncLoading}
           onCheckAuthSync={checkAuthSync}

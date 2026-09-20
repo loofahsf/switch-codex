@@ -256,6 +256,9 @@ h1, h2, h3, h4, p { margin: 0; }
 .settings-cli { margin: 18px 0; }
 .settings-cli summary { margin-bottom: 12px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+.backup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.backup-result { display: block; margin-top: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.backup-dialog-fields { display: grid; gap: 14px; padding-top: 4px; }
 .settings-success { color: var(--accent); font-size: 11px; }
 .settings-error { margin-top: 10px; color: var(--danger); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .settings-results { display: grid; gap: 10px; margin-top: 14px; }

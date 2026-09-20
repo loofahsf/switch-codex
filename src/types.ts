@@ -69,6 +69,23 @@ export interface ChosenFile {
   authJson: string;
 }
 
+export interface ChosenBackupFile {
+  filePath: string;
+  fileName: string;
+}
+
+export interface BackupTransferResult {
+  filePath: string;
+  fileName: string;
+  accountCount: number;
+}
+
+export interface ImportAccountsResult {
+  state: AccountsState;
+  accountCount: number;
+  autoSyncDisabled: boolean;
+}
+
 export interface RateLimitWindow {
   usedPercent: number;
   windowMinutes: number | null;
