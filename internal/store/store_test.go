@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func auth(id, token string) []byte {
@@ -69,6 +70,64 @@ func TestAuthValidationAndIdentity(t *testing.T) {
 	chatTeamB, _ := IdentifyAuth(userAuth("same-user", "team-b", "second"))
 	if !keyA.Equal(keyACopy) || keyA.Equal(keyB) || keyA.Equal(chatTeamA) || chatTeamA.Equal(chatTeamB) {
 		t.Fatal("composite identity did not distinguish login method, API key, user, and workspace")
+	}
+}
+
+func TestIndexRejectsDuplicateAndDanglingActiveIDs(t *testing.T) {
+	s := setup(t)
+	id := addAccount(t, s, "Alpha", "a")
+	targetBefore, err := os.ReadFile(s.TargetAuthPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authBefore, err := os.ReadFile(s.authPath(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := s.now().UTC().Format(time.RFC3339Nano)
+	missing := "missing"
+	corruptions := []struct {
+		name  string
+		value index
+		want  string
+	}{
+		{
+			name: "duplicate ID",
+			value: index{ActiveAccountID: &id, Accounts: []Account{
+				{ID: id, Name: "Alpha", CreatedAt: created, UpdatedAt: created},
+				{ID: id, Name: "Beta", CreatedAt: created, UpdatedAt: created},
+			}},
+			want: "账号索引包含重复 ID",
+		},
+		{
+			name:  "dangling active ID",
+			value: index{ActiveAccountID: &missing, Accounts: []Account{{ID: id, Name: "Alpha", CreatedAt: created, UpdatedAt: created}}},
+			want:  "账号索引的当前账号不存在",
+		},
+	}
+	for _, tc := range corruptions {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := s.save(tc.value); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.ListAccounts(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+			targetAfter, err := os.ReadFile(s.TargetAuthPath)
+			if err != nil || !bytes.Equal(targetAfter, targetBefore) {
+				t.Fatal("invalid index changed target credentials")
+			}
+			authAfter, err := os.ReadFile(s.authPath(id))
+			if err != nil || !bytes.Equal(authAfter, authBefore) {
+				t.Fatal("invalid index changed saved credentials")
+			}
+		})
+	}
+	if err := s.save(index{ActiveAccountID: &id, Accounts: []Account{{ID: id, Name: "Alpha", CreatedAt: created, UpdatedAt: created}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ListAccounts(); err != nil {
+		t.Fatalf("valid index rejected: %v", err)
 	}
 }
 func TestAccountLifecycleAndBackup(t *testing.T) {
@@ -133,6 +192,34 @@ func TestIndexFailureRollsBackAuth(t *testing.T) {
 	}
 	if _, e := os.Stat(s.authPath(b)); e != nil {
 		t.Fatal("removed credentials despite index failure")
+	}
+}
+
+func TestRemoveAccountReportsRollbackFailure(t *testing.T) {
+	s := setup(t)
+	addAccount(t, s, "Alpha", "a")
+	id := addAccount(t, s, "Beta", "b")
+	write := s.write
+	s.write = func(path string, b []byte, mode os.FileMode) error {
+		if path == s.indexPath() {
+			return errors.New("simulated index failure")
+		}
+		return write(path, b, mode)
+	}
+	rename := s.rename
+	s.rename = func(old, new string) error {
+		if strings.Contains(old, ".deleted-") {
+			return errors.New("simulated restore failure")
+		}
+		return rename(old, new)
+	}
+	_, err := s.RemoveAccount(id)
+	if err == nil || !strings.Contains(err.Error(), "simulated index failure") || !strings.Contains(err.Error(), "simulated restore failure") || !strings.Contains(err.Error(), ".deleted-") {
+		t.Fatalf("rollback error did not preserve recovery details: %v", err)
+	}
+	matches, globErr := filepath.Glob(filepath.Dir(s.authPath(id)) + ".deleted-*")
+	if globErr != nil || len(matches) != 1 {
+		t.Fatalf("tombstone recovery path missing: matches=%v err=%v", matches, globErr)
 	}
 }
 func TestBackupFailureDoesNotReplaceTarget(t *testing.T) {

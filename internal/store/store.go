@@ -79,10 +79,11 @@ type Store struct {
 	DataDir, TargetAuthPath string
 	now                     func() time.Time
 	write                   func(string, []byte, os.FileMode) error
+	rename                  func(string, string) error
 }
 
 func New(dataDir, targetAuthPath string) *Store {
-	return &Store{DataDir: dataDir, TargetAuthPath: targetAuthPath, now: time.Now, write: platform.WriteAtomic}
+	return &Store{DataDir: dataDir, TargetAuthPath: targetAuthPath, now: time.Now, write: platform.WriteAtomic, rename: os.Rename}
 }
 func (s *Store) indexPath() string { return filepath.Join(s.DataDir, "accounts.json") }
 func (s *Store) authPath(id string) string {
@@ -114,9 +115,19 @@ func (s *Store) read() (index, error) {
 	if len(bytes.TrimSpace(b)) == 0 || bytes.TrimSpace(b)[0] != '{' {
 		return i, errors.New("账号索引必须是 JSON 对象")
 	}
+	seenIDs := make(map[string]struct{}, len(i.Accounts))
 	for _, a := range i.Accounts {
 		if a.ID == "" || a.ID == "." || a.ID == ".." || strings.ContainsAny(a.ID, "/\\") {
 			return i, errors.New("账号索引包含非法 ID")
+		}
+		if _, exists := seenIDs[a.ID]; exists {
+			return i, errors.New("账号索引包含重复 ID")
+		}
+		seenIDs[a.ID] = struct{}{}
+	}
+	if i.ActiveAccountID != nil {
+		if _, exists := seenIDs[*i.ActiveAccountID]; !exists {
+			return i, errors.New("账号索引的当前账号不存在")
 		}
 	}
 	if i.Accounts == nil {
@@ -230,7 +241,7 @@ func (s *Store) RemoveAccount(id string) (AccountsState, error) {
 	tomb := dir + ".deleted-" + uuid.NewString()
 	moved := false
 	if _, err = os.Stat(dir); err == nil {
-		if err = os.Rename(dir, tomb); err != nil {
+		if err = s.rename(dir, tomb); err != nil {
 			return AccountsState{}, err
 		}
 		moved = true
@@ -243,7 +254,9 @@ func (s *Store) RemoveAccount(id string) (AccountsState, error) {
 	}
 	if err = s.save(i); err != nil {
 		if moved {
-			_ = os.Rename(tomb, dir)
+			if restore := s.rename(tomb, dir); restore != nil {
+				return AccountsState{}, fmt.Errorf("保存账号索引失败: %w；恢复账号目录失败，凭证保留在 %s: %v", err, tomb, restore)
+			}
 		}
 		return AccountsState{}, err
 	}

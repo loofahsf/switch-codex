@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+const maxSessionLineBytes = 16 << 20
+
 type tokens struct {
 	Input           uint64 `json:"input_tokens"`
 	CachedInput     uint64 `json:"cached_input_tokens"`
@@ -86,6 +88,9 @@ func (c *Client) UsageStats(ctx context.Context, priceDir, sessionsDir string, d
 	return aggregate(ctx, sessionsDir, days, c.loadPrices(ctx, priceDir, refresh), c.Now())
 }
 func aggregate(ctx context.Context, dir string, days uint32, prices catalog, now time.Time) (UsageStats, error) {
+	return aggregateWithMaxLine(ctx, dir, days, prices, now, maxSessionLineBytes)
+}
+func aggregateWithMaxLine(ctx context.Context, dir string, days uint32, prices catalog, now time.Time, maxLineBytes int) (UsageStats, error) {
 	models := map[string]*accumulator{}
 	daily := map[string]*accumulator{}
 	var sessions uint64
@@ -130,9 +135,16 @@ func aggregate(ctx context.Context, dir string, days uint32, prices catalog, now
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			// ReadBytes accepts long JSONL lines; Scanner's default 64 KiB limit
-			// would silently truncate normal Codex sessions containing tool output.
-			line, readErr := reader.ReadBytes('\n')
+			// Normal Codex events may exceed Scanner's 64 KiB default. ReadSlice
+			// keeps allocations bounded and lets an oversized event be discarded
+			// without losing the valid events that follow it.
+			line, oversized, readErr := readBoundedLine(reader, maxLineBytes)
+			if oversized {
+				if readErr != nil {
+					break
+				}
+				continue
+			}
 			if len(line) == 0 && readErr != nil {
 				break
 			}
@@ -289,4 +301,30 @@ func aggregate(ctx context.Context, dir string, days uint32, prices catalog, now
 	}
 	sort.Slice(r.Daily, func(i, j int) bool { return r.Daily[i].Date < r.Daily[j].Date })
 	return r, nil
+}
+
+func readBoundedLine(reader *bufio.Reader, max int) ([]byte, bool, error) {
+	line := make([]byte, 0, min(max, 64*1024))
+	oversized := false
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if !oversized {
+			if len(fragment) > max-len(line) {
+				line = nil
+				oversized = true
+			} else {
+				line = append(line, fragment...)
+			}
+		}
+		switch {
+		case err == nil:
+			return line, oversized, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			return line, oversized, io.EOF
+		default:
+			return line, oversized, err
+		}
+	}
 }

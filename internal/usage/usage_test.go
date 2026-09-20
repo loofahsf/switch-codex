@@ -99,6 +99,23 @@ func TestCumulativeCountersAndLongMalformedLines(t *testing.T) {
 		t.Fatal("unknown model priced")
 	}
 }
+
+func TestOversizedSessionLineIsSkippedWithoutLosingFollowingEvents(t *testing.T) {
+	dir := t.TempDir()
+	valid := `{"type":"event_msg","timestamp":"2026-09-09T09:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":20}}}}`
+	oversized := `{"ignored":"` + strings.Repeat("x", 512) + `"}`
+	if err := os.WriteFile(filepath.Join(dir, "rollout.jsonl"), []byte(oversized+"\n"+valid+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	now, _ := time.Parse(time.RFC3339, "2026-09-09T10:00:00Z")
+	r, err := aggregateWithMaxLine(context.Background(), dir, 0, catalog{}, now, 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Summary.TotalTokens != 120 || r.Summary.ModelCalls != 1 {
+		t.Fatalf("valid event after oversized line was lost: %+v", r.Summary)
+	}
+}
 func TestPricesLiveCacheBundled(t *testing.T) {
 	b, _ := os.ReadFile("testdata/pricing.md")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(b) }))

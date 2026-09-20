@@ -56,6 +56,10 @@ go vet ./...
 go test -race ./internal/...
 ```
 
+每次任务都必须评估对 Linux 构建和运行的影响。凡涉及 Go/Wails、依赖、构建脚本、安装包或平台运行时的修改，必须通过 GitHub Checks 中的 `Linux package` job；在 Ubuntu 24.04 环境中还应运行 `npm run build:linux:x64` 和 `bash scripts/verify-linux-package.sh`。若当前开发机不是 Linux，必须明确说明本地无法完成该验证，并等待 Linux CI 通过后才能宣告任务完成。
+
+Linux 无头冒烟测试允许仅在测试进程环境中设置 `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`，以兼容受限 CI Runner；不得把该变量写入应用代码、Desktop Entry、安装包或用户运行环境。
+
 修改任何绑定服务方法或 DTO 后，运行 `npm run bindings` 并提交 `src/bindings/` 的更新。不要手工修改生成的绑定。
 
 ## 4. 跨平台构建

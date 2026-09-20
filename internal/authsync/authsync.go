@@ -411,7 +411,7 @@ func (s *Service) Close() {
 }
 
 func readBoundedFile(path string, max int64) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := openAuthFile(path)
 	if err != nil {
 		return nil, err
 	}
