@@ -23,6 +23,8 @@ const commands: Record<string, (args: Args) => PromiseLike<unknown>> = {
   get_usage_stats: (args) => AppService.GetUsageStats(args.days as number, args.refreshPrices as boolean | undefined ?? null),
   get_account_quotas: () => AppService.GetAccountQuotas(),
   get_account_quota: (args) => AppService.GetAccountQuota(args.accountId as string),
+  warmup_account: (args) => AppService.WarmupAccount(args.accountId as string),
+  warmup_all_accounts: () => AppService.WarmupAllAccounts(),
   get_settings: () => AppService.GetSettings(),
   detect_codex_cli_path: () => AppService.DetectCodexCLIPath(),
   save_settings: (args) => AppService.SaveSettings(args.settings as Settings),

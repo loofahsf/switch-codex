@@ -24,6 +24,7 @@ type AppService struct {
 	store          *store.Store
 	usage          *usage.Client
 	scheduler      *scheduler.Scheduler
+	manualWarmup   *scheduler.ManualWarmup
 	authSync       *authsync.Service
 	home, priceDir string
 }
@@ -94,6 +95,24 @@ func (s *AppService) GetAccountQuota(accountID string) (usage.AccountQuotas, err
 	}
 	return s.usage.AccountQuota(s.ctx, state, accountID)
 }
+func (s *AppService) WarmupAccount(accountID string) error {
+	if s.manualWarmup == nil || s.scheduler == nil {
+		return errors.New("手动预热尚未就绪")
+	}
+	// CLI configuration is shared, but the manual executor deliberately does
+	// not inspect or mutate any scheduled-task state.
+	configuredCLI := s.scheduler.Settings().CLIPath
+	defer s.refreshAccountsAfterWarmup(s.ctx)
+	return s.manualWarmup.WarmupAccount(accountID, configuredCLI)
+}
+func (s *AppService) WarmupAllAccounts() error {
+	if s.manualWarmup == nil || s.scheduler == nil {
+		return errors.New("手动预热尚未就绪")
+	}
+	configuredCLI := s.scheduler.Settings().CLIPath
+	defer s.refreshAccountsAfterWarmup(s.ctx)
+	return s.manualWarmup.WarmupAll(configuredCLI)
+}
 func (s *AppService) GetSettings() scheduler.Settings {
 	if s.scheduler == nil {
 		return scheduler.Settings{}
@@ -160,15 +179,20 @@ func (s *AppService) notify(state store.AccountsState) {
 	application.InvokeAsync(func() { s.rebuildMenus(state) })
 	s.app.Event.Emit("accounts-changed", state)
 }
-func (s *AppService) batchFinished(ctx context.Context) {
+
+// refreshAccountsAfterWarmup only refreshes account-facing data after either
+// execution path completes. It does not read or update scheduled task state.
+func (s *AppService) refreshAccountsAfterWarmup(ctx context.Context) {
 	state, err := s.store.ListAccounts()
 	if err != nil {
 		return
 	}
 	s.notify(state)
-	s.authSync.Trigger(true)
+	if s.authSync != nil {
+		s.authSync.Trigger(true)
+	}
 	quotas := s.usage.AccountQuotas(ctx, state)
 	if ctx.Err() == nil {
-		s.app.Event.Emit("scheduled-quotas-changed", quotas)
+		s.app.Event.Emit("account-quotas-changed", quotas)
 	}
 }

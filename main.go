@@ -33,7 +33,7 @@ func init() {
 	application.RegisterEvent[store.AccountsState]("accounts-changed")
 	application.RegisterEvent[string]("switch-error")
 	application.RegisterEvent[scheduler.RunStatus]("scheduled-run-changed")
-	application.RegisterEvent[usage.AccountQuotas]("scheduled-quotas-changed")
+	application.RegisterEvent[usage.AccountQuotas]("account-quotas-changed")
 	application.RegisterEvent[authsync.Status]("auth-sync-changed")
 }
 func main() {
@@ -63,7 +63,10 @@ func main() {
 		if development {
 			svc.priceDir = filepath.Join(root, ".cache", "switch-codex")
 		}
-		svc.scheduler, initErr = scheduler.New(svc.store, scheduler.Options{Emit: func(event string, data any) { a.Event.Emit(event, data) }, BatchFinished: svc.batchFinished})
+		svc.scheduler, initErr = scheduler.New(svc.store, scheduler.Options{Emit: func(event string, data any) { a.Event.Emit(event, data) }, BatchFinished: svc.refreshAccountsAfterWarmup})
+		if initErr == nil {
+			svc.manualWarmup, initErr = scheduler.NewManualWarmup(svc.store, scheduler.Options{})
+		}
 		if initErr == nil {
 			svc.authSync = authsync.New(svc.store, authsync.Options{
 				Enabled:         svc.scheduler.Settings().AutoSyncAuth,
@@ -103,6 +106,9 @@ func main() {
 		cancel()
 		if svc.authSync != nil {
 			svc.authSync.Close()
+		}
+		if svc.manualWarmup != nil {
+			svc.manualWarmup.Close()
 		}
 		if svc.scheduler != nil {
 			svc.scheduler.Close()

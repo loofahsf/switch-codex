@@ -95,3 +95,11 @@ export function SaveSettings(settings: scheduler$0.Settings): $CancellablePromis
 export function SwitchAccount(accountID: string): $CancellablePromise<store$0.AccountsState> {
     return $Call.ByID(3806381117, accountID);
 }
+
+export function WarmupAccount(accountID: string): $CancellablePromise<void> {
+    return $Call.ByID(671149517, accountID);
+}
+
+export function WarmupAllAccounts(): $CancellablePromise<void> {
+    return $Call.ByID(923941697);
+}

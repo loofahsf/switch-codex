@@ -69,6 +69,8 @@ export default function App() {
   const [quotas, setQuotas] = useState<AccountQuotas | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [refreshingQuotaAccountId, setRefreshingQuotaAccountId] = useState<string | null>(null);
+  const [warmingAccountIds, setWarmingAccountIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [warmingAllAccounts, setWarmingAllAccounts] = useState(false);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [usageRange, setUsageRange] = useState(14);
   const [usageLoading, setUsageLoading] = useState(false);
@@ -81,6 +83,8 @@ export default function App() {
   const usageLoadingRef = useRef(false);
   const quotaLoadingRef = useRef(false);
   const refreshingQuotaAccountIdRef = useRef<string | null>(null);
+  const warmingAccountIdsRef = useRef(new Set<string>());
+  const warmingAllAccountsRef = useRef(false);
   const followedAtRef = useRef<string | null>(null);
 
   const updateQuotas = useCallback((nextQuotas: AccountQuotas | null) => {
@@ -208,13 +212,13 @@ export default function App() {
       console.error('Failed to listen for auth-sync-changed:', error);
     });
 
-    listen<AccountQuotas>('scheduled-quotas-changed', (nextQuotas) => {
+    listen<AccountQuotas>('account-quotas-changed', (nextQuotas) => {
       if (!disposed) updateQuotas(nextQuotas);
     }).then((unlisten) => {
       if (disposed) unlisten();
       else unlisteners.push(unlisten);
     }).catch((error) => {
-      console.error('Failed to listen for scheduled-quotas-changed:', error);
+      console.error('Failed to listen for account-quotas-changed:', error);
     });
 
     return () => {
@@ -377,6 +381,50 @@ export default function App() {
     }
   }
 
+  async function warmupAccount(account: AccountItem) {
+    if (warmingAccountIdsRef.current.has(account.id)) return;
+    warmingAccountIdsRef.current.add(account.id);
+    setWarmingAccountIds(new Set(warmingAccountIdsRef.current));
+    try {
+      setAccountMessage({ text: `正在预热「${account.name}」…`, type: 'neutral' });
+      await invoke<void>('warmup_account', { accountId: account.id });
+      const text = `已预热「${account.name}」，额度已刷新`;
+      setAccountMessage({ text, type: 'success' });
+      void toast.success(text);
+    } catch (error) {
+      const text = getErrorMessage(error, `预热「${account.name}」失败`);
+      setAccountMessage({ text, type: 'error' });
+      void toast.error(text);
+    } finally {
+      warmingAccountIdsRef.current.delete(account.id);
+      setWarmingAccountIds(new Set(warmingAccountIdsRef.current));
+    }
+  }
+
+  async function warmupAllAccounts() {
+    if (warmingAllAccountsRef.current) return;
+    if (state.accounts.length === 0) {
+      setAccountMessage({ text: '还没有可预热的账号', type: 'neutral' });
+      return;
+    }
+    warmingAllAccountsRef.current = true;
+    setWarmingAllAccounts(true);
+    try {
+      setAccountMessage({ text: '正在按随机延迟预热全部账号…', type: 'neutral' });
+      await invoke<void>('warmup_all_accounts');
+      const text = '全部账号预热完成，额度已刷新';
+      setAccountMessage({ text, type: 'success' });
+      void toast.success(text);
+    } catch (error) {
+      const text = getErrorMessage(error, '批量预热失败');
+      setAccountMessage({ text, type: 'error' });
+      void toast.error(text);
+    } finally {
+      warmingAllAccountsRef.current = false;
+      setWarmingAllAccounts(false);
+    }
+  }
+
   function changeUsageRange(range: number) {
     usageRangeRef.current = range;
     setUsageRange(range);
@@ -399,24 +447,30 @@ export default function App() {
         onViewChange={changeView}
       />
       <section className="workspace">
-        <SettingsView active={view === 'settings'} />
+        <SettingsView
+          active={view === 'settings'}
+          authSyncStatus={authSyncStatus}
+          authSyncLoading={authSyncLoading}
+          onCheckAuthSync={checkAuthSync}
+          onAddPendingCurrentAccount={addPendingCurrentAccount}
+        />
         <AccountsView
           active={view === 'accounts'}
           state={state}
           quotas={quotas}
           quotaLoading={quotaLoading}
           refreshingQuotaAccountId={refreshingQuotaAccountId}
-          authSyncStatus={authSyncStatus}
-          authSyncLoading={authSyncLoading}
+          warmingAccountIds={warmingAccountIds}
+          warmingAllAccounts={warmingAllAccounts}
           inlineMessage={accountMessage}
           onChooseFile={chooseAuthFile}
           onAddAccount={addAccount}
           onSwitchAccount={switchAccount}
-          onCheckAuthSync={checkAuthSync}
-          onAddPendingCurrentAccount={addPendingCurrentAccount}
           onRemoveAccount={removeAccount}
           onRefreshQuotas={refreshAccountQuotas}
           onRefreshAccountQuota={refreshAccountQuota}
+          onWarmupAllAccounts={warmupAllAccounts}
+          onWarmupAccount={warmupAccount}
         />
         <UsageView
           active={view === 'usage'}

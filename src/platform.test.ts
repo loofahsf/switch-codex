@@ -2,14 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const names = ['ListAccounts', 'AddAccount', 'RemoveAccount', 'SwitchAccount', 'GetAuthSyncStatus',
   'CheckAuthSyncNow', 'AddPendingCurrentAccount',
-  'ChooseAuthFile', 'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'GetSettings',
+  'ChooseAuthFile', 'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'WarmupAccount', 'WarmupAllAccounts', 'GetSettings',
   'DetectCodexCLIPath', 'SaveSettings', 'GetScheduledRunStatus', 'OpenURL', 'Confirm'];
 const mocks = vi.hoisted(() => ({ calls: {} as Record<string, ReturnType<typeof vi.fn>>, on: vi.fn() }));
 vi.mock('@wailsio/runtime', () => ({ Events: { On: mocks.on } }));
 vi.mock('./bindings/switch-codex/appservice', () => Object.fromEntries([
   'ListAccounts', 'AddAccount', 'RemoveAccount', 'SwitchAccount', 'GetAuthSyncStatus',
   'CheckAuthSyncNow', 'AddPendingCurrentAccount',
-  'ChooseAuthFile', 'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'GetSettings',
+  'ChooseAuthFile', 'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'WarmupAccount', 'WarmupAllAccounts', 'GetSettings',
   'DetectCodexCLIPath', 'SaveSettings', 'GetScheduledRunStatus', 'OpenURL', 'Confirm'
 ].map((name) => [name, mocks.calls[name] = vi.fn().mockResolvedValue(null)])));
 import { confirm, getErrorMessage, invoke, listen } from './platform';
@@ -30,6 +30,8 @@ describe('desktop command contract', () => {
     ['get_usage_stats', { days: 0 }, 'GetUsageStats', [0, null]],
     ['get_account_quotas', {}, 'GetAccountQuotas', []],
     ['get_account_quota', { accountId: 'id' }, 'GetAccountQuota', ['id']],
+    ['warmup_account', { accountId: 'id' }, 'WarmupAccount', ['id']],
+    ['warmup_all_accounts', {}, 'WarmupAllAccounts', []],
     ['get_settings', {}, 'GetSettings', []],
     ['detect_codex_cli_path', {}, 'DetectCodexCLIPath', []],
     ['save_settings', { settings: { enabled: false, time: null, cliPath: null, autoSyncAuth: true } }, 'SaveSettings', [{ enabled: false, time: null, cliPath: null, autoSyncAuth: true }]],

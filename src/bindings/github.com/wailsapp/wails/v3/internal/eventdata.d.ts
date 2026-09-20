@@ -21,9 +21,9 @@ import type * as usage$0 from "../../../../../switch-codex/internal/usage/models
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
+            "account-quotas-changed": usage$0.AccountQuotas;
             "accounts-changed": store$0.AccountsState;
             "auth-sync-changed": authsync$0.Status;
-            "scheduled-quotas-changed": usage$0.AccountQuotas;
             "scheduled-run-changed": scheduler$0.RunStatus;
             "switch-error": string;
         }

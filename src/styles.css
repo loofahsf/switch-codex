@@ -69,7 +69,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .primary-button:hover, .switch-button:hover, .refresh-button:hover { background: var(--accent-hover); }
 .add-account-button { display: flex; align-items: center; gap: 6px; height: 27px; min-height: 27px; padding: 5px 10px; font-size: 12px; }
 .add-account-button img { width: 12px; height: 12px; }
-.content-grid { display: flex; flex: 1 1 auto; flex-direction: column; gap: 12px; min-height: 0; padding: 20px; overflow: auto; }
+.content-grid { display: flex; flex: 1 1 auto; flex-direction: column; gap: 12px; min-height: 0; padding: 20px; overflow: auto; margin-bottom: 12px; }
 .panel, .account-item, .quota-card, .metric-card, .usage-subpanel, .model-table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 
 .account-form { flex: 0 0 auto; padding: 16px; }
@@ -91,9 +91,9 @@ h1, h2, h3, h4, p { margin: 0; }
 .form-message[data-type="success"] { color: var(--accent); }
 .form-message[data-type="error"], .usage-message[data-type="error"] { color: var(--danger); }
 
-.auth-sync-panel { display: grid; gap: 10px; flex: 0 0 auto; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-.auth-sync-panel.is-synced, .auth-sync-panel.is-followed, .auth-sync-panel.is-up_to_date { border-color: #99f6e4; background: var(--accent-soft); }
-.auth-sync-panel.is-unknown, .auth-sync-panel.is-ambiguous, .auth-sync-panel.is-invalid, .auth-sync-panel.is-missing, .auth-sync-panel.is-error { border-color: #fed7aa; background: #fff7ed; }
+.auth-sync-status { display: grid; gap: 10px; margin-top: 12px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.auth-sync-status.is-synced, .auth-sync-status.is-followed, .auth-sync-status.is-up_to_date { border-color: #99f6e4; background: var(--accent-soft); }
+.auth-sync-status.is-unknown, .auth-sync-status.is-ambiguous, .auth-sync-status.is-invalid, .auth-sync-status.is-missing, .auth-sync-status.is-error { border-color: #fed7aa; background: #fff7ed; }
 .auth-sync-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .auth-sync-summary > div { display: grid; gap: 3px; min-width: 0; }
 .auth-sync-summary strong { color: var(--ink); font-size: 12px; }
@@ -108,9 +108,12 @@ h1, h2, h3, h4, p { margin: 0; }
 .account-list-panel { min-height: 0; }
 .list-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .list-heading > span { color: var(--muted); font-size: 11px; font-weight: 600; }
+.list-heading-actions { display: flex; align-items: center; gap: 6px; }
 .refresh-quota-btn { display: flex; align-items: center; gap: 4px; padding: 0; color: var(--muted); background: transparent; font-size: 11px; }
 .refresh-quota-btn img { width: 22px; height: 22px; }
 .refresh-quota-btn:hover { color: var(--accent); }
+.warmup-all-button, .warmup-account-button { color: var(--accent) !important; font-size: 11px; }
+.warmup-all-button { min-height: 22px; padding: 0 4px; }
 .refresh-quota-btn:disabled, .refresh-button:disabled { opacity: .55; cursor: wait; }
 .account-list { display: grid; gap: 12px; }
 .account-item { display: grid; gap: 10px; padding: 14px 16px; }
@@ -128,6 +131,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .switch-button:disabled { color: var(--subtle); background: var(--bg); cursor: default; }
 .refresh-account-quota-button, .danger-button { width: 22px; height: 22px; padding: 0; overflow: hidden; background-repeat: no-repeat; background-position: center; color: transparent; font-size: 0; }
 .refresh-account-quota-button { background-color: var(--bg) !important; background-image: url("./assets/refresh.svg") !important; }
+.warmup-account-button { min-width: 38px; height: 22px; min-height: 22px; padding: 0 4px; }
 .danger-button { background-color: var(--danger-soft) !important; background-image: url("./assets/trash.svg") !important; }
 .refresh-account-quota-button:hover, .danger-button:hover { filter: brightness(.97); }
 .account-quota-box { display: grid; gap: 7px; }

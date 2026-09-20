@@ -5,7 +5,6 @@ import type {
   AccountItem,
   AccountQuotas,
   AccountsState,
-  AuthSyncStatus,
   ChosenFile,
   InlineMessage
 } from '../types';
@@ -19,17 +18,17 @@ interface AccountsViewProps {
   quotas: AccountQuotas | null;
   quotaLoading: boolean;
   refreshingQuotaAccountId: string | null;
-  authSyncStatus: AuthSyncStatus;
-  authSyncLoading: boolean;
+  warmingAccountIds: ReadonlySet<string>;
+  warmingAllAccounts: boolean;
   inlineMessage: InlineMessage;
   onChooseFile: () => Promise<ChosenFile | null>;
   onAddAccount: (name: string, authJson: string) => Promise<boolean>;
   onSwitchAccount: (account: AccountItem) => Promise<void>;
-  onCheckAuthSync: () => Promise<void>;
-  onAddPendingCurrentAccount: (name: string) => Promise<boolean>;
   onRemoveAccount: (account: AccountItem) => Promise<void>;
   onRefreshQuotas: () => Promise<void>;
   onRefreshAccountQuota: (account: AccountItem) => Promise<void>;
+  onWarmupAllAccounts: () => Promise<void>;
+  onWarmupAccount: (account: AccountItem) => Promise<void>;
 }
 
 export default function AccountsView({
@@ -38,25 +37,23 @@ export default function AccountsView({
   quotas,
   quotaLoading,
   refreshingQuotaAccountId,
-  authSyncStatus,
-  authSyncLoading,
+  warmingAccountIds,
+  warmingAllAccounts,
   inlineMessage,
   onChooseFile,
   onAddAccount,
   onSwitchAccount,
-  onCheckAuthSync,
-  onAddPendingCurrentAccount,
   onRemoveAccount,
   onRefreshQuotas,
-  onRefreshAccountQuota
+  onRefreshAccountQuota,
+  onWarmupAllAccounts,
+  onWarmupAccount
 }: AccountsViewProps) {
   const [formCollapsed, setFormCollapsed] = useState(true);
   const [name, setName] = useState('');
   const [selectedAuth, setSelectedAuth] = useState<ChosenFile | null>(null);
   const [saving, setSaving] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
-  const [pendingName, setPendingName] = useState('');
-  const [savingPending, setSavingPending] = useState(false);
 
   async function chooseAuthFile() {
     const file = await onChooseFile();
@@ -91,22 +88,6 @@ export default function AccountsView({
     }
   }
 
-  async function addPending(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSavingPending(true);
-    try {
-      if (await onAddPendingCurrentAccount(pendingName)) {
-        setPendingName('');
-      }
-    } finally {
-      setSavingPending(false);
-    }
-  }
-
-  const checkedAt = authSyncStatus.checkedAt
-    ? new Date(authSyncStatus.checkedAt).toLocaleString('zh-CN', { hour12: false })
-    : '尚未检查';
-
   return (
     <section className={`view${active ? ' is-active' : ''}`}>
       <header className="content-header" data-window-drag-region="true">
@@ -125,38 +106,6 @@ export default function AccountsView({
       </header>
 
       <div className={`content-grid${formCollapsed ? ' is-form-collapsed' : ''}`}>
-        <section className={`auth-sync-panel is-${authSyncStatus.state}`} aria-live="polite">
-          <div className="auth-sync-summary">
-            <div>
-              <strong>{authSyncStatus.enabled ? '认证文件自动同步已开启' : '认证文件自动同步已关闭'}</strong>
-              <span>{authSyncStatus.message || '每 30 秒只检查 ~/.codex/auth.json'}</span>
-              <small>{authSyncStatus.enabled ? `最多延迟 30 秒 · 最近检查：${checkedAt}` : '可在设置页面重新开启'}</small>
-            </div>
-            <Button
-              type="text"
-              className="auth-sync-check-button"
-              disabled={!authSyncStatus.enabled || authSyncLoading || authSyncStatus.state === 'checking'}
-              loading={authSyncLoading || authSyncStatus.state === 'checking'}
-              onClick={() => void onCheckAuthSync()}
-            >
-              立即检查
-            </Button>
-          </div>
-          {authSyncStatus.state === 'unknown' && authSyncStatus.pendingId ? (
-            <form className="auth-sync-pending" onSubmit={(event) => void addPending(event)}>
-              <Input
-                value={pendingName}
-                autoComplete="off"
-                placeholder="为当前登录账号命名"
-                aria-label="当前登录账号名称"
-                required
-                onChange={(event) => setPendingName(event.target.value)}
-              />
-              <Button type="primary" htmlType="submit" loading={savingPending}>添加当前账号</Button>
-            </form>
-          ) : null}
-        </section>
-
         <form className={`panel account-form${formCollapsed ? ' is-collapsed' : ''}`} onSubmit={submit}>
           <div className="panel-heading">
             <div>
@@ -194,15 +143,26 @@ export default function AccountsView({
         <section className="account-list-panel">
           <div className="list-heading">
             <span>{state.accounts.length} 个账号</span>
-            <Button
-              type="text"
-              className="refresh-quota-btn"
-              disabled={quotaLoading}
-              onClick={onRefreshQuotas}
-            >
-              <img src={refreshIcon} alt="" />
-              <span>{quotaLoading ? '查询中...' : '刷新额度'}</span>
-            </Button>
+            <div className="list-heading-actions">
+              <Button
+                type="text"
+                className="refresh-quota-btn"
+                disabled={quotaLoading}
+                onClick={onRefreshQuotas}
+              >
+                <img src={refreshIcon} alt="" />
+                <span>{quotaLoading ? '查询中...' : '刷新额度'}</span>
+              </Button>
+              <Button
+                type="text"
+                className="warmup-all-button"
+                disabled={warmingAllAccounts}
+                loading={warmingAllAccounts}
+                onClick={onWarmupAllAccounts}
+              >
+                {warmingAllAccounts ? '预热中...' : '全部预热'}
+              </Button>
+            </div>
           </div>
           <div className="account-list">
             {state.accounts.length === 0 ? (
@@ -246,6 +206,17 @@ export default function AccountsView({
                           loading={refreshingQuotaAccountId === account.id}
                           onClick={() => onRefreshAccountQuota(account)}
                         />
+                        <Button
+                          type="text"
+                          className="warmup-account-button"
+                          title="立即用随机小任务预热该账号"
+                          aria-label="立即用随机小任务预热该账号"
+                          disabled={warmingAccountIds.has(account.id)}
+                          loading={warmingAccountIds.has(account.id)}
+                          onClick={() => onWarmupAccount(account)}
+                        >
+                          {warmingAccountIds.has(account.id) ? '预热中' : '预热'}
+                        </Button>
                         <Button
                           type="text"
                           className="danger-button"

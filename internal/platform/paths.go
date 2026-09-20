@@ -78,7 +78,7 @@ func DevelopmentDataDir(root string) (string, error) {
 		return dst, nil
 	}
 	// Stage and validate everything before modifying the destination. Only the
-	// durable store is copied: no lock handles or scheduled-runtime credentials.
+	// Only durable store data is copied: no lock handles or temporary runtime credentials.
 	staging, err := os.MkdirTemp(root, ".account-migration-*")
 	if err != nil {
 		return "", err

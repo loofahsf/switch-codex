@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"github.com/google/uuid"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -58,30 +56,7 @@ func New(st *store.Store, opts Options) (s *Scheduler, err error) {
 	if err = st.EnsureReady(); err != nil {
 		return nil, err
 	}
-	if opts.Now == nil {
-		opts.Now = platform.LocalNow
-	}
-	if opts.Runner == nil {
-		opts.Runner = ProcessRunner{}
-	}
-	if opts.RandomIntn == nil {
-		opts.RandomIntn = rand.IntN
-	}
-	if opts.Wait == nil {
-		opts.Wait = wait
-	}
-	if opts.ResolveCLI == nil {
-		opts.ResolveCLI = ResolveCLI
-	}
-	if opts.ValidateCLI == nil {
-		opts.ValidateCLI = func(ctx context.Context, path string) error { return ValidateCLI(ctx, path, ProcessRunner{}) }
-	}
-	if opts.PollInterval == 0 {
-		opts.PollInterval = PollInterval
-	}
-	if opts.AccountTimeout == 0 {
-		opts.AccountTimeout = AccountTimeout
-	}
+	opts = defaultOptions(opts)
 	ctx, cancel := context.WithCancel(context.Background())
 	s = &Scheduler{store: st, path: filepath.Join(st.DataDir, "settings.json"), runtime: filepath.Join(st.DataDir, "scheduled-runtime"), lock: lock, opts: opts, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1)}
 	raw, readErr := os.ReadFile(s.path)
@@ -115,6 +90,34 @@ func New(st *store.Store, opts Options) (s *Scheduler, err error) {
 		}
 	}
 	return s, nil
+}
+
+func defaultOptions(opts Options) Options {
+	if opts.Now == nil {
+		opts.Now = platform.LocalNow
+	}
+	if opts.Runner == nil {
+		opts.Runner = ProcessRunner{}
+	}
+	if opts.RandomIntn == nil {
+		opts.RandomIntn = rand.IntN
+	}
+	if opts.Wait == nil {
+		opts.Wait = wait
+	}
+	if opts.ResolveCLI == nil {
+		opts.ResolveCLI = ResolveCLI
+	}
+	if opts.ValidateCLI == nil {
+		opts.ValidateCLI = func(ctx context.Context, path string) error { return ValidateCLI(ctx, path, ProcessRunner{}) }
+	}
+	if opts.PollInterval == 0 {
+		opts.PollInterval = PollInterval
+	}
+	if opts.AccountTimeout == 0 {
+		opts.AccountTimeout = AccountTimeout
+	}
+	return opts
 }
 func validSaved(raw []byte, s savedState) bool {
 	var obj map[string]json.RawMessage
@@ -285,7 +288,7 @@ func (s *Scheduler) Tick() {
 	tasks := make([]scheduledAccount, 0, len(snapshots))
 	saved.LastRun = &BatchResult{StartedAt: now.Format(time.RFC3339Nano), Accounts: make([]AccountResult, 0, len(snapshots))}
 	for i, a := range snapshots {
-		delay := MinAccountDelay + time.Duration(s.opts.RandomIntn(int((MaxAccountDelay-MinAccountDelay)/time.Second)+1))*time.Second
+		delay := randomAccountDelay(s.opts.RandomIntn)
 		scheduledAt := scheduledFor.Add(delay)
 		prompt, scheduledStamp := prompts[i], scheduledAt.UTC().Format(time.RFC3339Nano)
 		saved.LastRun.Accounts = append(saved.LastRun.Accounts, AccountResult{AccountID: a.ID, AccountName: a.Name, Status: Waiting, ScheduledAt: ptr(scheduledStamp), Prompt: ptr(prompt), Response: ptr("")})
@@ -376,6 +379,10 @@ func wait(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
+func randomAccountDelay(randomIntn func(int) int) time.Duration {
+	return MinAccountDelay + time.Duration(randomIntn(int((MaxAccountDelay-MinAccountDelay)/time.Second)+1))*time.Second
+}
+
 func (s *Scheduler) runBatch(accounts []scheduledAccount, path *string) {
 	cli, cliErr := s.opts.ResolveCLI(path)
 	if cliErr == nil {
@@ -397,14 +404,20 @@ func (s *Scheduler) runBatch(accounts []scheduledAccount, path *string) {
 				if !s.update(task.index, Running, nil, nil) {
 					return
 				}
-				text, err := s.runAccount(cli, task.snapshot, task.index, task.prompt)
+				result := executeAccount(s.ctx, s.store, s.runtime, cli, s.opts.Runner, s.opts.AccountTimeout, task.snapshot, task.prompt)
 				status := Success
 				var message *string
-				if err != nil {
+				if result.err != nil {
 					status = Failed
-					message = ptr(err.Error())
+					message = ptr(result.err.Error())
+				} else if result.warning != nil {
+					s.mu.Lock()
+					if !s.stopping {
+						s.saved.LastRun.Accounts[task.index].Message = ptr(result.warning.Error())
+					}
+					s.mu.Unlock()
 				}
-				s.update(task.index, status, message, &text)
+				s.update(task.index, status, message, &result.response)
 			}()
 		}
 		workers.Wait()
@@ -425,60 +438,6 @@ func (s *Scheduler) runBatch(accounts []scheduledAccount, path *string) {
 	if s.opts.BatchFinished != nil {
 		s.opts.BatchFinished(s.ctx)
 	}
-}
-func (s *Scheduler) runAccount(cli string, a store.Snapshot, i int, prompt string) (string, error) {
-	original, err := a.Credentials()
-	if err != nil {
-		return "", err
-	}
-	normalized, err := store.NormalizeAuth(original)
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(s.runtime, uuid.NewString())
-	defer os.RemoveAll(dir)
-	home, work := filepath.Join(dir, "home"), filepath.Join(dir, "work")
-	for _, d := range []string{dir, home, work} {
-		if err = os.MkdirAll(d, 0700); err != nil {
-			return "", errors.New("无法创建临时认证目录")
-		}
-		if err = os.Chmod(d, 0700); err != nil {
-			return "", errors.New("无法设置认证目录权限")
-		}
-	}
-	if err = platform.WriteAtomic(filepath.Join(home, "auth.json"), normalized, 0600); err != nil {
-		return "", errors.New("无法准备临时认证文件")
-	}
-	if s.ctx.Err() != nil {
-		return "", errors.New("任务已中断")
-	}
-	out, runErr := s.opts.Runner.Run(s.ctx, invocation(cli, home, work, prompt), s.opts.AccountTimeout)
-	// A refresh may succeed even when the model request fails or times out.
-	var warning error
-	refreshed, e := os.ReadFile(filepath.Join(home, "auth.json"))
-	if e != nil {
-		warning = errors.New("无法读取 CLI 刷新后的凭证")
-	} else if !bytes.Equal(refreshed, normalized) {
-		warning = s.store.PersistRefreshedAuth(a.ID, original, refreshed)
-	}
-	if runErr == nil {
-		runErr = completion(out)
-	}
-	if runErr != nil && warning != nil {
-		return response(out), fmt.Errorf("%w；%v", runErr, warning)
-	}
-	if runErr != nil {
-		return response(out), runErr
-	}
-	// A successful call with failed refresh is still successful in the UI.
-	if warning != nil {
-		s.mu.Lock()
-		if !s.stopping {
-			s.saved.LastRun.Accounts[i].Message = ptr(warning.Error())
-		}
-		s.mu.Unlock()
-	}
-	return response(out), nil
 }
 func (s *Scheduler) Close() {
 	s.closeOnce.Do(func() {

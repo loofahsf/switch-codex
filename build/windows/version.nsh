@@ -1,2 +1,2 @@
 ; Generated from package.json.
-!define APP_VERSION "2.0.5"
+!define APP_VERSION "2.0.6"

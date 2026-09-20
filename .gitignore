@@ -33,6 +33,7 @@ build/windows/MicrosoftEdgeWebview2Setup.exe
 /data/accounts.json
 /data/settings.json
 /data/scheduled-runtime/
+/data/manual-runtime/
 /data/scheduler.lock
 /data/.migrated-from-tauri
 /data/openai-model-prices.json

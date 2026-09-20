@@ -7,7 +7,15 @@ import TimePicker from 'antd/es/time-picker';
 import Modal from 'antd/es/modal';
 import dayjs from 'dayjs';
 import { getErrorMessage, invoke, listen } from '../platform';
-import type { ScheduledAccountResult, ScheduledAccountStatus, ScheduledRunStatus, Settings } from '../types';
+import type { AuthSyncStatus, ScheduledAccountResult, ScheduledAccountStatus, ScheduledRunStatus, Settings } from '../types';
+
+interface SettingsViewProps {
+  active: boolean;
+  authSyncStatus: AuthSyncStatus;
+  authSyncLoading: boolean;
+  onCheckAuthSync: () => Promise<void>;
+  onAddPendingCurrentAccount: (name: string) => Promise<boolean>;
+}
 
 const defaultSettings: Settings = { enabled: false, time: null, cliPath: null, autoSyncAuth: true };
 const statusLabels: Record<ScheduledAccountStatus, string> = {
@@ -37,7 +45,13 @@ function timingText(account: ScheduledAccountResult): string {
   return parts.join(' · ') || '等待执行';
 }
 
-export default function SettingsView({ active }: { active: boolean }) {
+export default function SettingsView({
+  active,
+  authSyncStatus,
+  authSyncLoading,
+  onCheckAuthSync,
+  onAddPendingCurrentAccount
+}: SettingsViewProps) {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [saved, setSaved] = useState<Settings | null>(null);
   const [status, setStatus] = useState<ScheduledRunStatus | null>(null);
@@ -48,6 +62,8 @@ export default function SettingsView({ active }: { active: boolean }) {
   const [detectedCliPath, setDetectedCliPath] = useState<string | null>(null);
   const [detectingCli, setDetectingCli] = useState(true);
   const [cliDetectionError, setCliDetectionError] = useState('');
+  const [pendingName, setPendingName] = useState('');
+  const [savingPending, setSavingPending] = useState(false);
   const [selected, setSelected] = useState<{ batchStartedAt: string; accountId: string } | null>(null);
   const needsAutoPath = !settings.cliPath?.trim();
 
@@ -119,6 +135,19 @@ export default function SettingsView({ active }: { active: boolean }) {
     }
   }
 
+  async function addPendingCurrentAccount() {
+    const name = pendingName.trim();
+    if (!name || savingPending) return;
+    setSavingPending(true);
+    try {
+      if (await onAddPendingCurrentAccount(name)) {
+        setPendingName('');
+      }
+    } finally {
+      setSavingPending(false);
+    }
+  }
+
   const dirty = saved !== null && JSON.stringify(saved) !== JSON.stringify(settings);
   const batch = status?.lastRun;
   const selectedAccount = batch?.startedAt === selected?.batchStartedAt
@@ -126,6 +155,9 @@ export default function SettingsView({ active }: { active: boolean }) {
     : undefined;
   const successCount = batch?.accounts.filter((account) => account.status === 'success').length ?? 0;
   const finishedCount = batch?.accounts.filter((account) => !['waiting', 'running'].includes(account.status)).length ?? 0;
+  const authCheckedAt = authSyncStatus.checkedAt
+    ? new Date(authSyncStatus.checkedAt).toLocaleString('zh-CN', { hour12: false })
+    : '尚未检查';
 
   return (
     <section className={`view${active ? ' is-active' : ''}`}>
@@ -147,6 +179,47 @@ export default function SettingsView({ active }: { active: boolean }) {
             />
           </div>
           <p className="settings-help">身份唯一匹配时自动保存 Token 更新；检测到其他已保存账号时安全跟随，身份不明确时不会覆盖。</p>
+          <section className={`auth-sync-status is-${authSyncStatus.state}`} aria-live="polite">
+            <div className="auth-sync-summary">
+              <div>
+                <strong>检测状态</strong>
+                <span>{authSyncStatus.message || '等待检查当前认证文件'}</span>
+                <small>{authSyncStatus.enabled ? `最多延迟 30 秒 · 最近检查：${authCheckedAt}` : '自动同步设置尚未启用'}</small>
+              </div>
+              <Button
+                type="text"
+                className="auth-sync-check-button"
+                disabled={!authSyncStatus.enabled || authSyncLoading || authSyncStatus.state === 'checking'}
+                loading={authSyncLoading || authSyncStatus.state === 'checking'}
+                onClick={() => void onCheckAuthSync()}
+              >
+                立即检查
+              </Button>
+            </div>
+            {authSyncStatus.state === 'unknown' && authSyncStatus.pendingId ? (
+              <div className="auth-sync-pending">
+                <Input
+                  value={pendingName}
+                  autoComplete="off"
+                  placeholder="为当前登录账号命名"
+                  aria-label="当前登录账号名称"
+                  onChange={(event) => setPendingName(event.target.value)}
+                  onPressEnter={(event) => {
+                    event.preventDefault();
+                    void addPendingCurrentAccount();
+                  }}
+                />
+                <Button
+                  type="primary"
+                  loading={savingPending}
+                  disabled={!pendingName.trim()}
+                  onClick={() => void addPendingCurrentAccount()}
+                >
+                  添加当前账号
+                </Button>
+              </div>
+            ) : null}
+          </section>
           <div className="settings-divider" />
           <div className="panel-heading settings-heading">
             <div>
