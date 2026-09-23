@@ -15,10 +15,10 @@ import (
 const AppIdentifier = "com.switchcodex.app"
 
 func DataDir(development bool, root, home, override string) (string, error) {
-	return dataDirForOS(runtime.GOOS, development, root, home, override, os.Getenv("LOCALAPPDATA"), os.Getenv("XDG_DATA_HOME"))
+	return dataDirForOS(runtime.GOOS, development, root, home, override, os.Getenv("LOCALAPPDATA"))
 }
 
-func dataDirForOS(goos string, development bool, root, home, override, localAppData, xdgDataHome string) (string, error) {
+func dataDirForOS(goos string, development bool, root, home, override, localAppData string) (string, error) {
 	if override != "" {
 		return filepath.Abs(override)
 	}
@@ -31,13 +31,10 @@ func dataDirForOS(goos string, development bool, root, home, override, localAppD
 		}
 		return filepath.Join(localAppData, AppIdentifier, "data"), nil
 	}
-	if goos == "linux" {
-		if xdgDataHome == "" {
-			xdgDataHome = filepath.Join(home, ".local", "share")
-		}
-		return filepath.Join(xdgDataHome, AppIdentifier, "data"), nil
+	if goos == "darwin" {
+		return filepath.Join(home, "Library", "Application Support", AppIdentifier, "data"), nil
 	}
-	return filepath.Join(home, "Library", "Application Support", AppIdentifier, "data"), nil
+	return "", fmt.Errorf("不支持的平台：%s", goos)
 }
 
 // A completed copy leaves a marker and the original directory intact. No

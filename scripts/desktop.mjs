@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pkg, wailsVersion } from './version-files.mjs';
@@ -78,9 +78,8 @@ if (action === 'dev') {
   run(resolve(binary), []);
 } else {
   if (!['build', 'package'].includes(action)) throw new Error(`Unknown task: ${action}`);
-  if (!((platform === 'darwin' && ['arm64','amd64'].includes(arch)) || (['windows','linux'].includes(platform) && arch === 'amd64'))) throw new Error('Supported targets: darwin arm64/amd64, windows amd64, linux amd64');
+  if (!((platform === 'darwin' && ['arm64', 'amd64'].includes(arch)) || (platform === 'windows' && arch === 'amd64'))) throw new Error('Supported targets: darwin arm64/amd64, windows amd64');
   if (platform === 'darwin' && process.platform !== 'darwin') throw new Error('macOS builds require macOS and Xcode Command Line Tools');
-  if (platform === 'linux' && process.platform !== 'linux') throw new Error('Linux builds require a Linux host with GTK4 and WebKitGTK 6.0 development packages');
   run(process.execPath, ['scripts/sync-version.mjs']);
   run(process.execPath, ['scripts/check-release-version.mjs']);
   generateBindings();
@@ -102,7 +101,7 @@ if (action === 'dev') {
   if (action === 'package') {
     if (dev) throw new Error('Cannot package a development build');
     mkdirSync('release', { recursive: true });
-    const extension = platform === 'darwin' ? '.dmg' : platform === 'windows' ? '-setup.exe' : '.deb';
+    const extension = platform === 'darwin' ? '.dmg' : '-setup.exe';
     const target = resolve(`release/Switch-Codex-${pkg.version}-${platform}-${arch}${extension}`);
     if (app) {
       const stage = join(output, 'dmg');
@@ -115,12 +114,6 @@ if (action === 'dev') {
       run(cli, ['generate','webview2bootstrapper','-dir','build/windows']);
       const makensis = process.env.MAKENSIS || (process.platform === 'win32' && existsSync('C:/Program Files (x86)/NSIS/makensis.exe') ? 'C:/Program Files (x86)/NSIS/makensis.exe' : 'makensis');
       run(makensis, ['-V2',`-DAPP_BINARY=${binary}`,`-DOUTPUT_FILE=${target}`,'installer.nsi'], {}, resolve('build/windows'));
-    } else {
-      const generated = resolve('release/switch-codex.deb');
-      rmSync(generated, { force: true });
-      run(cli, ['tool','package','-name','switch-codex','-format','deb','-config','build/linux/nfpm.yaml','-out','release'], { APP_VERSION: pkg.version, GOARCH: arch, LINUX_BINARY: binary });
-      rmSync(target, { force: true });
-      renameSync(generated, target);
     }
     console.log(`Package: ${target}`);
   }

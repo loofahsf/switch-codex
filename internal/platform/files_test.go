@@ -72,33 +72,25 @@ func TestDataDirPlatformPaths(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "workspace")
 	home := filepath.Join(base, "home", "tester")
-	xdg := filepath.Join(base, "data-home")
 	override := filepath.Join(base, "custom", "switch-codex")
 
-	got, err := dataDirForOS("linux", false, root, home, override, "", xdg)
+	got, err := dataDirForOS("darwin", false, root, home, override, "")
 	if err != nil || got != override {
 		t.Fatalf("override path = %q, %v; want %q", got, err, override)
 	}
-	got, err = dataDirForOS("linux", false, root, home, "", "", xdg)
-	want := filepath.Join(xdg, AppIdentifier, "data")
-	if err != nil || got != want {
-		t.Fatalf("XDG path = %q, %v; want %q", got, err, want)
-	}
-	got, err = dataDirForOS("linux", false, root, home, "", "", "")
-	want = filepath.Join(home, ".local", "share", AppIdentifier, "data")
-	if err != nil || got != want {
-		t.Fatalf("default Linux path = %q, %v; want %q", got, err, want)
-	}
 	localAppData := filepath.Join(base, "LocalAppData")
-	got, err = dataDirForOS("windows", false, root, home, "", localAppData, "")
-	want = filepath.Join(localAppData, AppIdentifier, "data")
+	got, err = dataDirForOS("windows", false, root, home, "", localAppData)
+	want := filepath.Join(localAppData, AppIdentifier, "data")
 	if err != nil || got != want {
 		t.Fatalf("Windows path = %q, %v; want %q", got, err, want)
 	}
-	got, err = dataDirForOS("darwin", false, root, home, "", "", "")
+	got, err = dataDirForOS("darwin", false, root, home, "", "")
 	want = filepath.Join(home, "Library", "Application Support", AppIdentifier, "data")
 	if err != nil || got != want {
 		t.Fatalf("macOS path = %q, %v; want %q", got, err, want)
+	}
+	if _, err = dataDirForOS("freebsd", false, root, home, "", ""); err == nil {
+		t.Fatal("unknown platform should be unsupported")
 	}
 }
 func legacyData(t *testing.T, root string) {
