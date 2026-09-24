@@ -18,19 +18,22 @@ import (
 
 const PricingURL = "https://developers.openai.com/api/docs/pricing.md"
 const QuotaURL = "https://chatgpt.com/backend-api/wham/usage"
+const ResetCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+const ResetCreditConsumeURL = ResetCreditsURL + "/consume"
 
 //go:embed openai_pricing_fallback.json
 var fallbackJSON []byte
 
 type Client struct {
-	HTTP                           *http.Client
-	PricingEndpoint, QuotaEndpoint string
-	Now                            func() time.Time
-	QuotaInterval                  time.Duration
+	HTTP                                                 *http.Client
+	PricingEndpoint, QuotaEndpoint, ResetCreditsEndpoint string
+	ResetCreditConsumeEndpoint                           string
+	Now                                                  func() time.Time
+	QuotaInterval                                        time.Duration
 }
 
 func NewClient() *Client {
-	return &Client{HTTP: &http.Client{Timeout: 12 * time.Second}, PricingEndpoint: PricingURL, QuotaEndpoint: QuotaURL, Now: time.Now, QuotaInterval: 3 * time.Second}
+	return &Client{HTTP: &http.Client{Timeout: 12 * time.Second}, PricingEndpoint: PricingURL, QuotaEndpoint: QuotaURL, ResetCreditsEndpoint: ResetCreditsURL, ResetCreditConsumeEndpoint: ResetCreditConsumeURL, Now: time.Now, QuotaInterval: 3 * time.Second}
 }
 
 type catalog struct {

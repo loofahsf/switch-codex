@@ -4,11 +4,14 @@
 export type {
     AccountQuota,
     AccountQuotas,
+    ConsumeRateLimitResetCreditResult,
     CreditsInfo,
     DailyUsageItem,
     DisplayedPrice,
     ModelUsageItem,
     PricingSource,
+    RateLimitResetCredit,
+    RateLimitResetCredits,
     RateLimitWindow,
     UsageStats,
     UsageSummary

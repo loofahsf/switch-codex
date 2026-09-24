@@ -13,6 +13,7 @@ export interface AccountQuota {
     "weekly": RateLimitWindow | null;
     "monthly": RateLimitWindow | null;
     "credits": CreditsInfo | null;
+    "resetCredits": RateLimitResetCredits | null;
     "fetchedAt": string | null;
     "error": string | null;
 }
@@ -20,6 +21,11 @@ export interface AccountQuota {
 export interface AccountQuotas {
     "sourceUrl": string;
     "accounts": AccountQuota[] | null;
+}
+
+export interface ConsumeRateLimitResetCreditResult {
+    "code": string;
+    "windowsReset": number;
 }
 
 export interface CreditsInfo {
@@ -64,6 +70,22 @@ export interface PricingSource {
     "kind": string;
     "modelCount": number;
     "warning": string | null;
+}
+
+export interface RateLimitResetCredit {
+    "id": string;
+    "resetType": string;
+    "status": string;
+    "grantedAt": string;
+    "expiresAt": string | null;
+    "title": string | null;
+    "description": string | null;
+}
+
+export interface RateLimitResetCredits {
+    "availableCount": number;
+    "credits": RateLimitResetCredit[] | null;
+    "error": string | null;
 }
 
 export interface RateLimitWindow {

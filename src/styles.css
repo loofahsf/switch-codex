@@ -146,6 +146,8 @@ h1, h2, h3, h4, p { margin: 0; }
 .account-quota-reset { overflow: hidden; color: var(--subtle); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .account-quota-meta { color: var(--subtle); font-size: 9px; }
 .account-quota-status.is-error { color: var(--danger); }
+.reset-credits { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--subtle); font-size: 9px; }
+.reset-credits .ant-btn { margin-left: auto; height: 22px; padding-inline: 8px; font-size: 10px; }
 .empty-state, .usage-empty { padding: 28px 16px; color: var(--subtle); background: var(--panel); border: 1px dashed var(--line); border-radius: 8px; font-size: 11px; text-align: center; }
 .paths { display: grid; flex: 0 0 auto; gap: 6px; padding: 10px 20px; background: var(--panel); border-top: 1px solid var(--line); }
 .paths div { display: grid; grid-template-columns: 82px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; }
