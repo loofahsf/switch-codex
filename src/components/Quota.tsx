@@ -1,3 +1,4 @@
+import Button from 'antd/es/button';
 import type { AccountQuota, AccountsState, RateLimitWindow } from '../types';
 import {
   fillState,
@@ -83,9 +84,58 @@ function accountWindows(quota: AccountQuota | undefined) {
 interface AccountRowQuotaProps {
   quota: AccountQuota | undefined;
   loading: boolean;
+  resetting?: boolean;
+  onConsumeResetCredit?: (creditId: string) => Promise<void>;
 }
 
-export function AccountRowQuota({ quota, loading }: AccountRowQuotaProps) {
+function ResetCredits({
+  quota,
+  resetting = false,
+  onConsume
+}: {
+  quota: AccountQuota;
+  resetting?: boolean;
+  onConsume?: (creditId: string) => Promise<void>;
+}) {
+  if (!quota.resetCredits) return null;
+  const windows = accountWindows(quota);
+  const credit = quota.resetCredits.credits
+    .filter((item) => item.status === 'available')
+    .sort((left, right) => {
+      if (!left.expiresAt) return 1;
+      if (!right.expiresAt) return -1;
+      return Date.parse(left.expiresAt) - Date.parse(right.expiresAt);
+    })[0];
+  const canReset = [windows.fiveHour, windows.weekly].some(
+    (window) => window && window.usedPercent >= 90
+  );
+  const count = quota.resetCredits.availableCount;
+  const expiry = credit?.expiresAt
+    ? `最近到期 ${formatDateTime(credit.expiresAt)}`
+    : quota.resetCredits.error
+      ? '到期时间查询失败'
+      : '到期时间未知';
+
+  return (
+    <div className="reset-credits">
+      <span>限额重置卡：{count} 张</span>
+      {count > 0 ? <span>{expiry}</span> : null}
+      {onConsume && count > 0 ? (
+        <Button
+          size="small"
+          disabled={!canReset || resetting}
+          loading={resetting}
+          title={canReset ? '使用一张限额重置卡' : '5 小时或周限额剩余不超过 10% 时可使用'}
+          onClick={() => onConsume(credit?.id || '')}
+        >
+          使用重置卡
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+export function AccountRowQuota({ quota, loading, resetting, onConsumeResetCredit }: AccountRowQuotaProps) {
   const windows = accountWindows(quota);
   let status = '点击“刷新额度”后查询';
   let hasError = false;
@@ -111,6 +161,9 @@ export function AccountRowQuota({ quota, loading }: AccountRowQuotaProps) {
       <div className="account-quota-meta">
         <span className={`account-quota-status${hasError ? ' is-error' : ''}`}>{status}</span>
       </div>
+      {quota?.ok ? (
+        <ResetCredits quota={quota} resetting={resetting} onConsume={onConsumeResetCredit} />
+      ) : null}
     </div>
   );
 }
@@ -165,6 +218,7 @@ export function UsageQuotaGrid({ state, quotas }: UsageQuotaGridProps) {
                         : '无额外 credits'}
                 </p>
               ) : null}
+              <ResetCredits quota={quota} />
             </>
           )}
         </article>

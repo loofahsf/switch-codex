@@ -116,6 +116,15 @@ func (s *AppService) GetAccountQuota(accountID string) (usage.AccountQuotas, err
 	}
 	return s.usage.AccountQuota(s.ctx, state, accountID)
 }
+func (s *AppService) ConsumeRateLimitResetCredit(accountID, creditID, redeemRequestID string) (usage.ConsumeRateLimitResetCreditResult, error) {
+	// 使用存储层当前快照解析目标账号，避免前端传入任意凭据或文件路径。
+	state, err := s.store.ListAccounts()
+	if err != nil {
+		return usage.ConsumeRateLimitResetCreditResult{}, err
+	}
+	// 消费结果只代表本次请求，额度和剩余卡片由前端随后重新查询。
+	return s.usage.ConsumeResetCredit(s.ctx, state, accountID, creditID, redeemRequestID)
+}
 func (s *AppService) WarmupAccount(accountID string) error {
 	if s.manualWarmup == nil || s.scheduler == nil {
 		return errors.New("手动预热尚未就绪")

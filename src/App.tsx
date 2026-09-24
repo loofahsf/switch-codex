@@ -11,6 +11,7 @@ import type {
   AccountsState,
   AuthSyncStatus,
   ChosenFile,
+  ConsumeRateLimitResetCreditResult,
   InlineMessage,
   UsageStats,
   ViewName
@@ -69,6 +70,7 @@ export default function App() {
   const [quotas, setQuotas] = useState<AccountQuotas | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [refreshingQuotaAccountId, setRefreshingQuotaAccountId] = useState<string | null>(null);
+  const [resettingAccountId, setResettingAccountId] = useState<string | null>(null);
   const [warmingAccountIds, setWarmingAccountIds] = useState<ReadonlySet<string>>(() => new Set());
   const [warmingAllAccounts, setWarmingAllAccounts] = useState(false);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
@@ -83,6 +85,8 @@ export default function App() {
   const usageLoadingRef = useRef(false);
   const quotaLoadingRef = useRef(false);
   const refreshingQuotaAccountIdRef = useRef<string | null>(null);
+  const resettingAccountIdRef = useRef<string | null>(null);
+  const resetAttemptIdsRef = useRef(new Map<string, string>());
   const warmingAccountIdsRef = useRef(new Set<string>());
   const warmingAllAccountsRef = useRef(false);
   const followedAtRef = useRef<string | null>(null);
@@ -381,6 +385,52 @@ export default function App() {
     }
   }
 
+  async function consumeResetCredit(account: AccountItem, creditId: string) {
+    if (resettingAccountIdRef.current) return;
+    const quota = quotasRef.current?.accounts.find((item) => item.accountId === account.id);
+    const credit = quota?.resetCredits?.credits.find((item) => item.id === creditId);
+    const expiry = credit?.expiresAt ? `\n该卡到期时间：${new Date(credit.expiresAt).toLocaleString('zh-CN')}` : '';
+    const confirmed = await confirm(
+      `将为账号「${account.name}」使用 1 张限额重置卡，重置当前可重置的 5 小时和周限额。${expiry}\n此操作无法撤销。`,
+      { title: '使用限额重置卡', kind: 'warning' }
+    );
+    if (!confirmed) return;
+
+    // 为同一次逻辑操作保留幂等标识，网络失败后再次点击不会重复扣卡。
+    const redeemRequestId = resetAttemptIdsRef.current.get(account.id) || crypto.randomUUID();
+    resetAttemptIdsRef.current.set(account.id, redeemRequestId);
+    resettingAccountIdRef.current = account.id;
+    setResettingAccountId(account.id);
+    try {
+      // 消费完成后重新查询服务端状态，避免在本地推算剩余卡片和限额。
+      const result = await invoke<ConsumeRateLimitResetCreditResult>('consume_rate_limit_reset_credit', {
+        accountId: account.id,
+        creditId,
+        redeemRequestId
+      });
+      resetAttemptIdsRef.current.delete(account.id);
+      if (result.code === 'reset' || result.code === 'already_redeemed') {
+        const text = result.code === 'already_redeemed'
+          ? '该次重置已成功执行'
+          : `重置成功${result.windowsReset ? `，已重置 ${result.windowsReset} 个限额窗口` : ''}`;
+        setAccountMessage({ text, type: 'success' });
+        void toast.success(text);
+      } else if (result.code === 'nothing_to_reset') {
+        void toast.info('当前限额尚未达到可重置条件');
+      } else {
+        void toast.warning('该账号没有可用的限额重置卡');
+      }
+      await refreshAccountQuota(account);
+    } catch (error) {
+      const text = getErrorMessage(error, '使用重置卡失败');
+      setAccountMessage({ text, type: 'error' });
+      void toast.error(text);
+    } finally {
+      resettingAccountIdRef.current = null;
+      setResettingAccountId(null);
+    }
+  }
+
   async function warmupAccount(account: AccountItem) {
     if (warmingAccountIdsRef.current.has(account.id)) return;
     warmingAccountIdsRef.current.add(account.id);
@@ -461,6 +511,7 @@ export default function App() {
           quotas={quotas}
           quotaLoading={quotaLoading}
           refreshingQuotaAccountId={refreshingQuotaAccountId}
+          resettingAccountId={resettingAccountId}
           warmingAccountIds={warmingAccountIds}
           warmingAllAccounts={warmingAllAccounts}
           inlineMessage={accountMessage}
@@ -470,6 +521,7 @@ export default function App() {
           onRemoveAccount={removeAccount}
           onRefreshQuotas={refreshAccountQuotas}
           onRefreshAccountQuota={refreshAccountQuota}
+          onConsumeResetCredit={consumeResetCredit}
           onWarmupAllAccounts={warmupAllAccounts}
           onWarmupAccount={warmupAccount}
         />

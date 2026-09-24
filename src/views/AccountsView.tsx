@@ -18,6 +18,7 @@ interface AccountsViewProps {
   quotas: AccountQuotas | null;
   quotaLoading: boolean;
   refreshingQuotaAccountId: string | null;
+  resettingAccountId: string | null;
   warmingAccountIds: ReadonlySet<string>;
   warmingAllAccounts: boolean;
   inlineMessage: InlineMessage;
@@ -27,6 +28,7 @@ interface AccountsViewProps {
   onRemoveAccount: (account: AccountItem) => Promise<void>;
   onRefreshQuotas: () => Promise<void>;
   onRefreshAccountQuota: (account: AccountItem) => Promise<void>;
+  onConsumeResetCredit: (account: AccountItem, creditId: string) => Promise<void>;
   onWarmupAllAccounts: () => Promise<void>;
   onWarmupAccount: (account: AccountItem) => Promise<void>;
 }
@@ -37,6 +39,7 @@ export default function AccountsView({
   quotas,
   quotaLoading,
   refreshingQuotaAccountId,
+  resettingAccountId,
   warmingAccountIds,
   warmingAllAccounts,
   inlineMessage,
@@ -46,6 +49,7 @@ export default function AccountsView({
   onRemoveAccount,
   onRefreshQuotas,
   onRefreshAccountQuota,
+  onConsumeResetCredit,
   onWarmupAllAccounts,
   onWarmupAccount
 }: AccountsViewProps) {
@@ -228,6 +232,8 @@ export default function AccountsView({
                     <AccountRowQuota
                       quota={quota}
                       loading={quotaLoading || refreshingQuotaAccountId === account.id}
+                      resetting={resettingAccountId === account.id}
+                      onConsumeResetCredit={(creditId) => onConsumeResetCredit(account, creditId)}
                     />
                   </article>
                 );

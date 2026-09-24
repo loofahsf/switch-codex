@@ -144,16 +144,21 @@ func TestQuotaCredentialSourceErrorsAndWindowParity(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer active" || r.Header.Get("ChatGPT-Account-Id") != "account" {
 			t.Error("wrong credential source")
 		}
-		w.Write([]byte(`{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":105,"limit_window_seconds":61},"secondary_window":{"used_percent":2,"limit_window_seconds":604800},"tertiary_window":{"used_percent":3,"limit_window_seconds":2592000}},"credits":{"has_credits":true,"balance":12.5}}`))
+		if r.URL.Path == "/reset-credits" {
+			w.Write([]byte(`{"available_count":1,"credits":[{"id":"credit-1","reset_type":"codex_rate_limits","status":"available","granted_at":"2026-09-01T00:00:00Z","expires_at":"2026-10-01T00:00:00Z","title":"Full reset"}]}`))
+			return
+		}
+		w.Write([]byte(`{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":105,"limit_window_seconds":61},"secondary_window":{"used_percent":2,"limit_window_seconds":604800},"tertiary_window":{"used_percent":3,"limit_window_seconds":2592000}},"rate_limit_reset_credits":{"available_count":1},"credits":{"has_credits":true,"balance":12.5}}`))
 	}))
 	defer server.Close()
 	c := NewClient()
-	c.QuotaEndpoint = server.URL
+	c.QuotaEndpoint = server.URL + "/usage"
+	c.ResetCreditsEndpoint = server.URL + "/reset-credits"
 	c.QuotaInterval = 0
 	state := store.AccountsState{TargetAuthPath: current, Accounts: []store.AccountItem{{Account: store.Account{ID: "a", Name: "A"}, AuthPath: saved, IsActive: true}}}
 	r := c.AccountQuotas(context.Background(), state)
 	q := r.Accounts[0]
-	if !q.Ok || q.Primary.UsedPercent != 105 || *q.Primary.WindowMinutes != 2 || q.Weekly == nil || q.Monthly == nil || *q.Credits.Balance != "12.5" {
+	if !q.Ok || q.Primary.UsedPercent != 105 || *q.Primary.WindowMinutes != 2 || q.Weekly == nil || q.Monthly == nil || *q.Credits.Balance != "12.5" || q.ResetCredits.AvailableCount != 1 || len(q.ResetCredits.Credits) != 1 || q.ResetCredits.Credits[0].ID != "credit-1" {
 		t.Fatalf("window contract differs: %+v", q)
 	}
 	if _, e := c.AccountQuota(context.Background(), state, "missing"); e == nil {
@@ -166,6 +171,36 @@ func TestQuotaCredentialSourceErrorsAndWindowParity(t *testing.T) {
 	os.WriteFile(current, []byte(`invalid`), 0600)
 	if q = c.AccountQuotas(context.Background(), state).Accounts[0]; q.Ok {
 		t.Fatal("invalid JSON accepted")
+	}
+}
+
+func TestConsumeRateLimitResetCredit(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"stored","account_id":"account"}}`), 0600)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer stored" || r.Header.Get("Content-Type") != "application/json" {
+			t.Error("wrong reset request")
+		}
+		var body struct {
+			RedeemRequestID string `json:"redeem_request_id"`
+			CreditID        string `json:"credit_id"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.RedeemRequestID != "attempt-1" || body.CreditID != "credit-1" {
+			t.Fatalf("wrong reset payload: %+v", body)
+		}
+		w.Write([]byte(`{"code":"reset","windows_reset":2}`))
+	}))
+	defer server.Close()
+	c := NewClient()
+	c.ResetCreditConsumeEndpoint = server.URL
+	state := store.AccountsState{Accounts: []store.AccountItem{{Account: store.Account{ID: "a"}, AuthPath: authPath}}}
+	result, err := c.ConsumeResetCredit(context.Background(), state, "a", "credit-1", "attempt-1")
+	if err != nil || result.Code != "reset" || result.WindowsReset != 2 {
+		t.Fatalf("reset failed: result=%+v err=%v", result, err)
+	}
+	if _, err = c.ConsumeResetCredit(context.Background(), state, "missing", "", "attempt-2"); err == nil {
+		t.Fatal("missing account accepted")
 	}
 }
 func TestQuotaHTTPFailures(t *testing.T) {

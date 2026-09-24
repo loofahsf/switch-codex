@@ -92,20 +92,42 @@ type CreditsInfo struct {
 	Balance    *string `json:"balance"`
 }
 
+type RateLimitResetCredit struct {
+	ID          string  `json:"id"`
+	ResetType   string  `json:"resetType"`
+	Status      string  `json:"status"`
+	GrantedAt   string  `json:"grantedAt"`
+	ExpiresAt   *string `json:"expiresAt"`
+	Title       *string `json:"title"`
+	Description *string `json:"description"`
+}
+
+type RateLimitResetCredits struct {
+	AvailableCount int64                  `json:"availableCount"`
+	Credits        []RateLimitResetCredit `json:"credits"`
+	Error          *string                `json:"error"`
+}
+
+type ConsumeRateLimitResetCreditResult struct {
+	Code         string `json:"code"`
+	WindowsReset int64  `json:"windowsReset"`
+}
+
 type AccountQuota struct {
-	AccountID   string           `json:"accountId"`
-	AccountName string           `json:"accountName"`
-	Ok          bool             `json:"ok"`
-	PlanType    *string          `json:"planType"`
-	Primary     *RateLimitWindow `json:"primary"`
-	Secondary   *RateLimitWindow `json:"secondary"`
-	Tertiary    *RateLimitWindow `json:"tertiary"`
-	FiveHour    *RateLimitWindow `json:"fiveHour"`
-	Weekly      *RateLimitWindow `json:"weekly"`
-	Monthly     *RateLimitWindow `json:"monthly"`
-	Credits     *CreditsInfo     `json:"credits"`
-	FetchedAt   *string          `json:"fetchedAt"`
-	Error       *string          `json:"error"`
+	AccountID    string                 `json:"accountId"`
+	AccountName  string                 `json:"accountName"`
+	Ok           bool                   `json:"ok"`
+	PlanType     *string                `json:"planType"`
+	Primary      *RateLimitWindow       `json:"primary"`
+	Secondary    *RateLimitWindow       `json:"secondary"`
+	Tertiary     *RateLimitWindow       `json:"tertiary"`
+	FiveHour     *RateLimitWindow       `json:"fiveHour"`
+	Weekly       *RateLimitWindow       `json:"weekly"`
+	Monthly      *RateLimitWindow       `json:"monthly"`
+	Credits      *CreditsInfo           `json:"credits"`
+	ResetCredits *RateLimitResetCredits `json:"resetCredits"`
+	FetchedAt    *string                `json:"fetchedAt"`
+	Error        *string                `json:"error"`
 }
 
 type AccountQuotas struct {

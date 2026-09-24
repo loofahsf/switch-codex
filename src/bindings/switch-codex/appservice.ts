@@ -52,6 +52,10 @@ export function Confirm(message: string, options: $models.ConfirmOptions): $Canc
     return $Call.ByID(3802682850, message, options);
 }
 
+export function ConsumeRateLimitResetCredit(accountID: string, creditID: string, redeemRequestID: string): $CancellablePromise<usage$0.ConsumeRateLimitResetCreditResult> {
+    return $Call.ByID(500136517, accountID, creditID, redeemRequestID);
+}
+
 export function DetectCodexCLIPath(): $CancellablePromise<string | null> {
     return $Call.ByID(2773836229);
 }

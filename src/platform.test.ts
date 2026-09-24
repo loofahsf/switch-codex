@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const names = ['ListAccounts', 'AddAccount', 'RemoveAccount', 'SwitchAccount', 'GetAuthSyncStatus',
   'CheckAuthSyncNow', 'AddPendingCurrentAccount',
   'ChooseAuthFile', 'ChooseAccountsBackup', 'ExportAccountsBackup', 'ImportAccountsBackup',
-  'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'WarmupAccount', 'WarmupAllAccounts', 'GetSettings',
+  'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'ConsumeRateLimitResetCredit', 'WarmupAccount', 'WarmupAllAccounts', 'GetSettings',
   'DetectCodexCLIPath', 'SaveSettings', 'GetScheduledRunStatus', 'OpenURL', 'Confirm'];
 const mocks = vi.hoisted(() => ({ calls: {} as Record<string, ReturnType<typeof vi.fn>>, on: vi.fn() }));
 vi.mock('@wailsio/runtime', () => ({ Events: { On: mocks.on } }));
@@ -11,7 +11,7 @@ vi.mock('./bindings/switch-codex/appservice', () => Object.fromEntries([
   'ListAccounts', 'AddAccount', 'RemoveAccount', 'SwitchAccount', 'GetAuthSyncStatus',
   'CheckAuthSyncNow', 'AddPendingCurrentAccount',
   'ChooseAuthFile', 'ChooseAccountsBackup', 'ExportAccountsBackup', 'ImportAccountsBackup',
-  'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'WarmupAccount', 'WarmupAllAccounts', 'GetSettings',
+  'GetUsageStats', 'GetAccountQuotas', 'GetAccountQuota', 'ConsumeRateLimitResetCredit', 'WarmupAccount', 'WarmupAllAccounts', 'GetSettings',
   'DetectCodexCLIPath', 'SaveSettings', 'GetScheduledRunStatus', 'OpenURL', 'Confirm'
 ].map((name) => [name, mocks.calls[name] = vi.fn().mockResolvedValue(null)])));
 import { confirm, getErrorMessage, invoke, listen } from './platform';
@@ -35,6 +35,7 @@ describe('desktop command contract', () => {
     ['get_usage_stats', { days: 0 }, 'GetUsageStats', [0, null]],
     ['get_account_quotas', {}, 'GetAccountQuotas', []],
     ['get_account_quota', { accountId: 'id' }, 'GetAccountQuota', ['id']],
+    ['consume_rate_limit_reset_credit', { accountId: 'id', creditId: 'credit', redeemRequestId: 'attempt' }, 'ConsumeRateLimitResetCredit', ['id', 'credit', 'attempt']],
     ['warmup_account', { accountId: 'id' }, 'WarmupAccount', ['id']],
     ['warmup_all_accounts', {}, 'WarmupAllAccounts', []],
     ['get_settings', {}, 'GetSettings', []],
