@@ -12,6 +12,8 @@ import (
 	"switch-codex/internal/store"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type Options struct {
@@ -26,21 +28,22 @@ type Options struct {
 	PollInterval, AccountTimeout time.Duration
 }
 type Scheduler struct {
-	mu                                 sync.Mutex
-	saved                              savedState
-	next                               *time.Time
-	running, stopping, asleep, started bool
-	offset                             int
-	error                              *string
-	store                              *store.Store
-	path, runtime                      string
-	lock                               *os.File
-	opts                               Options
-	ctx                                context.Context
-	cancel                             context.CancelFunc
-	wake                               chan struct{}
-	wg                                 sync.WaitGroup
-	closeOnce                          sync.Once
+	mu                        sync.Mutex
+	saved                     savedState
+	next                      map[string]*time.Time
+	running                   int
+	stopping, asleep, started bool
+	offset                    int
+	error                     *string
+	store                     *store.Store
+	path, runtime             string
+	lock                      *os.File
+	opts                      Options
+	ctx                       context.Context
+	cancel                    context.CancelFunc
+	wake                      chan struct{}
+	wg                        sync.WaitGroup
+	closeOnce                 sync.Once
 }
 
 func New(st *store.Store, opts Options) (s *Scheduler, err error) {
@@ -62,7 +65,7 @@ func New(st *store.Store, opts Options) (s *Scheduler, err error) {
 	raw, readErr := os.ReadFile(s.path)
 	if readErr == nil {
 		if json.Unmarshal(raw, &s.saved) != nil || !validSaved(raw, s.saved) || s.saved.Settings.Validate() != nil {
-			s.saved = savedState{Settings: Settings{AutoSyncAuth: true}}
+			s.saved = savedState{Settings: Settings{Schedules: []Schedule{{ID: "default"}}, AutoSyncAuth: true}}
 			s.error = ptr("设置文件损坏，定时调用已停用；请重新保存设置")
 		} else if s.saved.LastRun != nil && s.saved.LastRun.Accounts == nil {
 			// Old records may omit task details. Preserve the record while keeping
@@ -70,19 +73,20 @@ func New(st *store.Store, opts Options) (s *Scheduler, err error) {
 			s.saved.LastRun.Accounts = []AccountResult{}
 		}
 	} else if errors.Is(readErr, os.ErrNotExist) {
-		s.saved.Settings.AutoSyncAuth = true
+		s.saved.Settings = Settings{Schedules: []Schedule{{ID: "default"}}, AutoSyncAuth: true}
 	} else {
 		cancel()
 		return nil, errors.New("无法读取设置文件")
 	}
 	interrupt(&s.saved, opts.Now())
+	migrate(&s.saved)
 	if err = os.RemoveAll(s.runtime); err != nil {
 		cancel()
 		return nil, errors.New("无法清理上次任务的临时认证目录")
 	}
 	now := opts.Now()
 	_, s.offset = now.Zone()
-	s.next = nextRun(s.saved.Settings, now, s.saved.LastRunDate)
+	s.resetNext(now)
 	if s.error == nil {
 		if err = s.persist(s.saved); err != nil {
 			cancel()
@@ -181,9 +185,11 @@ func (s *Scheduler) Status() RunStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.opts.Now()
-	r := RunStatus{Timezone: now.Format("MST (UTC-07:00)"), Running: s.running, Error: s.error, LastRun: s.saved.LastRun}
-	if s.next != nil {
-		r.NextRunAt = ptr(s.next.Format(time.RFC3339Nano))
+	r := RunStatus{Timezone: now.Format("MST (UTC-07:00)"), Running: s.running > 0, Error: s.error, LastRun: s.saved.LastRun}
+	for _, next := range s.next {
+		if next != nil && (r.NextRunAt == nil || next.Before(parseStatusTime(*r.NextRunAt))) {
+			r.NextRunAt = ptr(next.Format(time.RFC3339Nano))
+		}
 	}
 	return clone(r)
 }
@@ -213,12 +219,24 @@ func (s *Scheduler) Save(ctx context.Context, settings Settings) (Settings, erro
 	}
 	saved := clone(s.saved)
 	saved.Settings = settings
+	for id := range saved.LastRunDates {
+		keep := false
+		for _, item := range settings.Schedules {
+			if item.ID == id {
+				keep = true
+				break
+			}
+		}
+		if !keep {
+			delete(saved.LastRunDates, id)
+		}
+	}
 	if err := s.persist(saved); err != nil {
 		s.mu.Unlock()
 		return Settings{}, err
 	}
 	s.saved = saved
-	s.next = nextRun(settings, s.opts.Now(), s.saved.LastRunDate)
+	s.resetNext(s.opts.Now())
 	s.error = nil
 	s.mu.Unlock()
 	select {
@@ -258,10 +276,30 @@ func (s *Scheduler) Wake() {
 	s.asleep = false
 	now := s.opts.Now()
 	_, s.offset = now.Zone()
-	s.next = nextRun(s.saved.Settings, now, s.saved.LastRunDate)
+	s.resetNext(now)
 	s.mu.Unlock()
 	s.emit()
 }
+func parseStatusTime(value string) time.Time {
+	parsed, _ := time.Parse(time.RFC3339Nano, value)
+	return parsed
+}
+func (s *Scheduler) resetNext(now time.Time) {
+	s.next = make(map[string]*time.Time, len(s.saved.Settings.Schedules))
+	if !s.saved.Settings.Enabled {
+		return
+	}
+	for _, item := range s.saved.Settings.Schedules {
+		s.next[item.ID] = nextScheduleRun(item, now, s.saved.LastRunDates[item.ID])
+	}
+}
+
+type batchLaunch struct {
+	key, runtime string
+	tasks        []scheduledAccount
+	path         *string
+}
+
 func (s *Scheduler) Tick() {
 	s.mu.Lock()
 	now := s.opts.Now()
@@ -272,81 +310,91 @@ func (s *Scheduler) Tick() {
 	_, offset := now.Zone()
 	if offset != s.offset {
 		s.offset = offset
-		s.next = nextRun(s.saved.Settings, now, s.saved.LastRunDate)
+		s.resetNext(now)
 	}
-	if s.next == nil || s.running {
-		s.mu.Unlock()
-		return
+	launches := []batchLaunch{}
+	changed := false
+	for _, item := range s.saved.Settings.Schedules {
+		next := s.next[item.ID]
+		if next == nil {
+			continue
+		}
+		delay := now.Sub(*next)
+		if delay < 0 {
+			continue
+		}
+		if delay > Grace {
+			s.next[item.ID] = nextScheduleRun(item, now, s.saved.LastRunDates[item.ID])
+			changed = true
+			continue
+		}
+		scheduledFor := *next
+		snapshots, err := s.store.Snapshots()
+		if err != nil {
+			s.error = ptr("账号存储不可用")
+			s.next[item.ID] = nextScheduleRun(item, now, scheduledFor.Format("2006-01-02"))
+			changed = true
+			continue
+		}
+		saved := clone(s.saved)
+		if saved.LastRunDates == nil {
+			saved.LastRunDates = map[string]string{}
+		}
+		saved.LastRunDates[item.ID] = scheduledFor.Format("2006-01-02")
+		prompts := selectPrompts(len(snapshots), scheduledFor, s.opts.RandomIntn)
+		tasks := make([]scheduledAccount, 0, len(snapshots))
+		batch := &BatchResult{ScheduleID: item.ID, StartedAt: now.Format(time.RFC3339Nano), Accounts: make([]AccountResult, 0, len(snapshots))}
+		for i, account := range snapshots {
+			scheduledAt := scheduledFor.Add(randomAccountDelay(s.opts.RandomIntn))
+			prompt := prompts[i]
+			batch.Accounts = append(batch.Accounts, AccountResult{AccountID: account.ID, AccountName: account.Name, Status: Waiting, ScheduledAt: ptr(scheduledAt.UTC().Format(time.RFC3339Nano)), Prompt: ptr(prompt), Response: ptr("")})
+			tasks = append(tasks, scheduledAccount{snapshot: account, index: i, prompt: prompt, scheduledAt: scheduledAt})
+		}
+		saved.LastRun = batch
+		// Claim the planned local date durably before starting any CLI task.
+		if err := s.persist(saved); err != nil {
+			s.error = ptr(err.Error())
+			s.next[item.ID] = nil
+			changed = true
+			continue
+		}
+		s.saved = saved
+		s.running++
+		s.error = nil
+		s.next[item.ID] = nextScheduleRun(item, now, saved.LastRunDates[item.ID])
+		s.wg.Add(1)
+		launches = append(launches, batchLaunch{key: batchKey(batch), runtime: filepath.Join(s.runtime, uuid.NewString()), tasks: tasks, path: clone(saved.Settings.CLIPath)})
+		changed = true
 	}
-	delay := now.Sub(*s.next)
-	if delay < 0 {
-		s.mu.Unlock()
-		s.emit()
-		return
-	}
-	if delay > Grace {
-		s.next = nextRun(s.saved.Settings, now, s.saved.LastRunDate)
-		s.mu.Unlock()
-		s.emit()
-		return
-	}
-	scheduledFor := *s.next
-	// Snapshot all credentials under the Store mutex before claiming the date.
-	snapshots, err := s.store.Snapshots()
-	if err != nil {
-		s.error = ptr("账号存储不可用")
-		s.next = nextRun(s.saved.Settings, now, ptr(now.Format("2006-01-02")))
-		s.mu.Unlock()
-		s.emit()
-		return
-	}
-	saved := clone(s.saved)
-	saved.LastRunDate = ptr(now.Format("2006-01-02"))
-	prompts := selectPrompts(len(snapshots), now, s.opts.RandomIntn)
-	tasks := make([]scheduledAccount, 0, len(snapshots))
-	saved.LastRun = &BatchResult{StartedAt: now.Format(time.RFC3339Nano), Accounts: make([]AccountResult, 0, len(snapshots))}
-	for i, a := range snapshots {
-		delay := randomAccountDelay(s.opts.RandomIntn)
-		scheduledAt := scheduledFor.Add(delay)
-		prompt, scheduledStamp := prompts[i], scheduledAt.UTC().Format(time.RFC3339Nano)
-		saved.LastRun.Accounts = append(saved.LastRun.Accounts, AccountResult{AccountID: a.ID, AccountName: a.Name, Status: Waiting, ScheduledAt: ptr(scheduledStamp), Prompt: ptr(prompt), Response: ptr("")})
-		tasks = append(tasks, scheduledAccount{snapshot: a, index: i, prompt: prompt, scheduledAt: scheduledAt})
-	}
-	// A durable date claim must precede every external CLI invocation.
-	if err = s.persist(saved); err != nil {
-		s.error = ptr(err.Error())
-		s.next = nil
-		s.mu.Unlock()
-		s.emit()
-		return
-	}
-	s.saved = saved
-	s.running = true
-	s.error = nil
-	s.next = nextRun(saved.Settings, now, saved.LastRunDate)
-	path := clone(saved.Settings.CLIPath)
-	s.wg.Add(1)
 	s.mu.Unlock()
-	s.emit()
-	go func() { defer s.wg.Done(); s.runBatch(tasks, path) }()
+	if changed {
+		s.emit()
+	}
+	for _, launch := range launches {
+		go func(launch batchLaunch) { defer s.wg.Done(); s.runBatch(launch) }(launch)
+	}
 }
-func (s *Scheduler) update(i int, status AccountStatus, message, response *string) bool {
+func batchKey(batch *BatchResult) string { return batch.ScheduleID + "|" + batch.StartedAt }
+func (s *Scheduler) update(key string, i int, status AccountStatus, message, response *string) bool {
 	s.mu.Lock()
 	if s.stopping {
 		s.mu.Unlock()
 		return false
 	}
+	if s.saved.LastRun == nil || batchKey(s.saved.LastRun) != key {
+		s.mu.Unlock()
+		return true
+	}
 	a := &s.saved.LastRun.Accounts[i]
 	if status == Success && message == nil {
 		message = a.Message
 	}
-	a.Status = status
-	a.Message = message
-	now := ptr(s.opts.Now().UTC().Format(time.RFC3339Nano))
+	a.Status, a.Message = status, message
+	stamp := ptr(s.opts.Now().UTC().Format(time.RFC3339Nano))
 	if status == Running {
-		a.StartedAt = now
+		a.StartedAt = stamp
 	} else {
-		a.FinishedAt = now
+		a.FinishedAt = stamp
 	}
 	if response != nil {
 		a.Response = response
@@ -401,55 +449,53 @@ func randomAccountDelay(randomIntn func(int) int) time.Duration {
 	return MinAccountDelay + time.Duration(randomIntn(int((MaxAccountDelay-MinAccountDelay)/time.Second)+1))*time.Second
 }
 
-func (s *Scheduler) runBatch(accounts []scheduledAccount, path *string) {
-	cli, cliErr := s.opts.ResolveCLI(path)
+func (s *Scheduler) runBatch(batch batchLaunch) {
+	cli, cliErr := s.opts.ResolveCLI(batch.path)
 	if cliErr == nil {
 		cliErr = s.opts.ValidateCLI(s.ctx, cli)
 	}
 	if cliErr != nil {
-		for _, task := range accounts {
-			s.update(task.index, Failed, ptr(cliErr.Error()), nil)
+		for _, task := range batch.tasks {
+			s.update(batch.key, task.index, Failed, ptr(cliErr.Error()), nil)
 		}
 	} else {
 		var workers sync.WaitGroup
-		workers.Add(len(accounts))
-		for _, task := range accounts {
-			go func() {
+		workers.Add(len(batch.tasks))
+		for _, task := range batch.tasks {
+			go func(task scheduledAccount) {
 				defer workers.Done()
 				if !s.opts.Wait(s.ctx, task.scheduledAt.Sub(s.opts.Now())) {
 					return
 				}
-				if !s.update(task.index, Running, nil, nil) {
+				if !s.update(batch.key, task.index, Running, nil, nil) {
 					return
 				}
-				result := executeAccount(s.ctx, s.store, s.runtime, cli, s.opts.Runner, s.opts.AccountTimeout, task.snapshot, task.prompt)
+				result := executeAccount(s.ctx, s.store, batch.runtime, cli, s.opts.Runner, s.opts.AccountTimeout, task.snapshot, task.prompt)
 				status := Success
 				var message *string
 				if result.err != nil {
 					status = Failed
 					message = ptr(result.err.Error())
 				} else if result.warning != nil {
-					s.mu.Lock()
-					if !s.stopping {
-						s.saved.LastRun.Accounts[task.index].Message = ptr(result.warning.Error())
-					}
-					s.mu.Unlock()
+					message = ptr(result.warning.Error())
 				}
-				s.update(task.index, status, message, &result.response)
-			}()
+				s.update(batch.key, task.index, status, message, &result.response)
+			}(task)
 		}
 		workers.Wait()
 	}
-	_ = os.RemoveAll(s.runtime)
+	_ = os.RemoveAll(batch.runtime)
 	s.mu.Lock()
 	if s.stopping {
 		s.mu.Unlock()
 		return
 	}
-	s.running = false
-	s.saved.LastRun.FinishedAt = ptr(s.opts.Now().UTC().Format(time.RFC3339Nano))
-	if err := s.persist(s.saved); err != nil {
-		s.error = ptr(err.Error())
+	s.running--
+	if s.saved.LastRun != nil && batchKey(s.saved.LastRun) == batch.key {
+		s.saved.LastRun.FinishedAt = ptr(s.opts.Now().UTC().Format(time.RFC3339Nano))
+		if err := s.persist(s.saved); err != nil {
+			s.error = ptr(err.Error())
+		}
 	}
 	s.mu.Unlock()
 	s.emit()
@@ -465,9 +511,9 @@ func (s *Scheduler) Close() {
 		s.mu.Unlock()
 		s.wg.Wait() // Includes credential write-back and child process cleanup.
 		s.mu.Lock()
-		wasRunning := s.running
+		wasRunning := s.running > 0
 		interrupt(&s.saved, s.opts.Now())
-		s.running = false
+		s.running = 0
 		if wasRunning {
 			if err := s.persist(s.saved); err != nil {
 				s.error = ptr(err.Error())

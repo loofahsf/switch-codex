@@ -1,7 +1,7 @@
 export type ViewName = 'accounts' | 'usage' | 'settings';
 export interface Settings {
   enabled: boolean;
-  time: string | null;
+  schedules: { id: string; time: string | null }[];
   cliPath: string | null;
   autoSyncAuth: boolean;
 }
@@ -35,6 +35,7 @@ export interface ScheduledRunStatus {
   running: boolean;
   error: string | null;
   lastRun: {
+    scheduleId: string;
     startedAt: string;
     finishedAt: string | null;
     accounts: ScheduledAccountResult[];

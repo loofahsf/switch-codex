@@ -1,6 +1,6 @@
 {
   "name": "switch-codex",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "A cross-platform Wails app for switching Codex auth.json profiles.",
   "author": "Switch Codex",
   "license": "MIT",

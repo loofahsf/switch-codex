@@ -9,5 +9,6 @@ export type {
     AccountResult,
     BatchResult,
     RunStatus,
+    Schedule,
     Settings
 } from "./models.js";

@@ -31,6 +31,7 @@ export enum AccountStatus {
 };
 
 export interface BatchResult {
+    "scheduleId": string;
     "startedAt": string;
     "finishedAt": string | null;
     "accounts": AccountResult[] | null;
@@ -44,9 +45,14 @@ export interface RunStatus {
     "lastRun": BatchResult | null;
 }
 
+export interface Schedule {
+    "id": string;
+    "time": string | null;
+}
+
 export interface Settings {
     "enabled": boolean;
-    "time": string | null;
+    "schedules": Schedule[] | null;
     "cliPath": string | null;
     "autoSyncAuth": boolean;
 }

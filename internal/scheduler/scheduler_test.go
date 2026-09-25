@@ -56,10 +56,16 @@ func newTestScheduler(t *testing.T, runner Runner, count int) (*Scheduler, *cloc
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	if _, err = s.Save(context.Background(), Settings{Enabled: true, Time: ptr("09:00")}); err != nil {
+	if _, err = s.Save(context.Background(), Settings{Enabled: true, Schedules: []Schedule{{ID: "default", Time: ptr("09:00")}}}); err != nil {
 		t.Fatal(err)
 	}
 	return s, c
+}
+func lastMap(v *string) map[string]string {
+	if v == nil {
+		return nil
+	}
+	return map[string]string{"default": *v}
 }
 func TestNextRunCalendarRules(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
@@ -81,7 +87,7 @@ func TestNextRunCalendarRules(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			at, _ := time.Parse(time.RFC3339, tc.at)
-			got := nextRun(Settings{Enabled: true, Time: &tc.schedule}, at.In(loc), tc.last)
+			got := nextRun(Settings{Enabled: true, Schedules: []Schedule{{ID: "default", Time: &tc.schedule}}}, at.In(loc), lastMap(tc.last))
 			if got == nil || got.Format(time.RFC3339) != tc.want {
 				t.Fatalf("got %v want %s", got, tc.want)
 			}
@@ -96,7 +102,7 @@ func TestSaveSchedulesTodayUntilTheConfiguredTimePasses(t *testing.T) {
 
 	// At 08:00, moving the daily call to noon still means noon today.
 	noon := "12:00"
-	if _, err := s.Save(context.Background(), Settings{Enabled: true, Time: &noon}); err != nil {
+	if _, err := s.Save(context.Background(), Settings{Enabled: true, Schedules: []Schedule{{ID: "default", Time: &noon}}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.Status().NextRunAt; got == nil || *got != "2026-09-09T12:00:00Z" {
@@ -105,7 +111,7 @@ func TestSaveSchedulesTodayUntilTheConfiguredTimePasses(t *testing.T) {
 
 	// Once noon has passed, the same setting rolls forward exactly one day.
 	c.Set(time.Date(2026, 9, 9, 12, 0, 1, 0, time.UTC))
-	if _, err := s.Save(context.Background(), Settings{Enabled: true, Time: &noon}); err != nil {
+	if _, err := s.Save(context.Background(), Settings{Enabled: true, Schedules: []Schedule{{ID: "default", Time: &noon}}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.Status().NextRunAt; got == nil || *got != "2026-09-10T12:00:00Z" {
@@ -113,12 +119,12 @@ func TestSaveSchedulesTodayUntilTheConfiguredTimePasses(t *testing.T) {
 	}
 }
 func TestSettingsCompatibility(t *testing.T) {
-	s := Settings{Enabled: true, Time: ptr("23:59"), CLIPath: ptr("  /some/cli  ")}
-	if err := s.Validate(); err != nil || *s.Time != "23:59:00" || *s.CLIPath != "/some/cli" {
+	s := Settings{Enabled: true, Schedules: []Schedule{{ID: "default", Time: ptr("23:59")}}, CLIPath: ptr("  /some/cli  ")}
+	if err := s.Validate(); err != nil || *s.Schedules[0].Time != "23:59:00" || *s.CLIPath != "/some/cli" {
 		t.Fatalf("%+v: %v", s, err)
 	}
 	for _, bad := range []string{"9:00", "24:00:00", "00:00:60", "12:34:56Z", ""} {
-		s.Time = &bad
+		s.Schedules[0].Time = &bad
 		if s.Validate() == nil {
 			t.Errorf("accepted %q", bad)
 		}
@@ -149,19 +155,19 @@ func TestSetAutoSyncAuthPreservesScheduleAndHistory(t *testing.T) {
 	schedule := "23:59:00"
 	cli := "/machine-specific/codex"
 	s.saved = savedState{
-		Settings:    Settings{Enabled: true, Time: &schedule, CLIPath: &cli, AutoSyncAuth: true},
-		LastRunDate: ptr("2026-09-19"),
-		LastRun:     &BatchResult{StartedAt: "2026-09-19T23:59:00Z", Accounts: []AccountResult{}},
+		Settings:     Settings{Enabled: true, Schedules: []Schedule{{ID: "default", Time: &schedule}}, CLIPath: &cli, AutoSyncAuth: true},
+		LastRunDates: map[string]string{"default": "2026-09-19"},
+		LastRun:      &BatchResult{StartedAt: "2026-09-19T23:59:00Z", Accounts: []AccountResult{}},
 	}
 	beforeStatus := clone(s.saved)
 	settings, err := s.SetAutoSyncAuth(false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.AutoSyncAuth || !settings.Enabled || settings.Time == nil || *settings.Time != schedule || settings.CLIPath == nil || *settings.CLIPath != cli {
+	if settings.AutoSyncAuth || !settings.Enabled || settings.Schedules[0].Time == nil || *settings.Schedules[0].Time != schedule || settings.CLIPath == nil || *settings.CLIPath != cli {
 		t.Fatalf("settings changed unexpectedly: %+v", settings)
 	}
-	if s.saved.LastRunDate == nil || *s.saved.LastRunDate != *beforeStatus.LastRunDate || s.saved.LastRun == nil || s.saved.LastRun.StartedAt != beforeStatus.LastRun.StartedAt {
+	if s.saved.LastRunDates["default"] != beforeStatus.LastRunDates["default"] || s.saved.LastRun == nil || s.saved.LastRun.StartedAt != beforeStatus.LastRun.StartedAt {
 		t.Fatalf("history changed unexpectedly: %+v", s.saved)
 	}
 	s.Close()
@@ -370,7 +376,7 @@ func TestBatchUsesCredentialSnapshotAndRunsAccountsInParallel(t *testing.T) {
 	if _, err := s.store.RemoveAccount(accounts.Accounts[1].ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Save(context.Background(), Settings{Enabled: false}); err != nil {
+	if _, err := s.Save(context.Background(), Settings{Enabled: false, Schedules: []Schedule{{ID: "default"}}}); err != nil {
 		t.Fatal(err)
 	}
 	c.Set(c.Now().Add(time.Hour))
@@ -410,6 +416,17 @@ func TestExitInterruptsAndReleasesLock(t *testing.T) {
 		if a.Status != Interrupted {
 			t.Fatalf("%+v", a)
 		}
+	}
+	stored, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted savedState
+	if err := json.Unmarshal(stored, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.LastRun == nil || persisted.LastRun.FinishedAt == nil || persisted.LastRun.Accounts[0].Status != Interrupted {
+		t.Fatal("shutdown interruption was not persisted")
 	}
 	restarted, err := New(s.store, s.opts)
 	if err != nil {
@@ -478,5 +495,186 @@ func TestLegacyRecordWithoutAccountDetailsUsesEmptyArray(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), `"accounts":[]`) {
 		t.Fatalf("array contract changed: %s", encoded)
+	}
+}
+
+func TestScheduleValidationBoundsAndDuplicates(t *testing.T) {
+	var explicitNull Settings
+	if err := json.Unmarshal([]byte(`{"enabled":false,"schedules":null}`), &explicitNull); err != nil {
+		t.Fatal(err)
+	}
+	if err := explicitNull.Validate(); err == nil {
+		t.Fatal("accepted explicit null schedules")
+	}
+	for _, count := range []int{0, 6} {
+		s := Settings{Schedules: make([]Schedule, count)}
+		for i := range s.Schedules {
+			s.Schedules[i] = Schedule{ID: string(rune('a' + i))}
+		}
+		if err := s.Validate(); err == nil {
+			t.Fatalf("accepted %d schedules", count)
+		}
+	}
+	s := Settings{Schedules: []Schedule{{ID: "one"}}}
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	s.Enabled = true
+	if err := s.Validate(); err == nil {
+		t.Fatal("enabled blank schedule accepted")
+	}
+	s.Schedules = []Schedule{{ID: "one", Time: ptr("09:00")}, {ID: "two", Time: ptr("09:00:00")}}
+	if err := s.Validate(); err == nil {
+		t.Fatal("duplicate times accepted")
+	}
+	s.Schedules[1].Time = ptr("10:00")
+	s.Schedules[1].ID = "one"
+	if err := s.Validate(); err == nil {
+		t.Fatal("duplicate IDs accepted")
+	}
+	s.Schedules[1].ID = "two"
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLegacyScheduleDateMigrationAndEditedTime(t *testing.T) {
+	root := t.TempDir()
+	st := store.New(filepath.Join(root, "data"), filepath.Join(root, "auth.json"))
+	if err := st.EnsureReady(); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"settings":{"enabled":true,"time":"09:00","autoSyncAuth":true},"lastRunDate":"2026-09-09"}`)
+	if err := os.WriteFile(filepath.Join(st.DataDir, "settings.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 9, 8, 0, 0, 0, time.UTC)
+	opts := Options{Now: func() time.Time { return now }, ResolveCLI: func(*string) (string, error) { return "synthetic", nil }, ValidateCLI: func(context.Context, string) error { return nil }}
+	s, err := New(st, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if len(s.Settings().Schedules) != 1 || s.Settings().Schedules[0].ID != "default" || s.saved.LastRunDates["default"] != "2026-09-09" {
+		t.Fatalf("migration: %+v", s.saved)
+	}
+	if _, err := s.Save(context.Background(), Settings{Enabled: true, Schedules: []Schedule{{ID: "default", Time: ptr("12:00")}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Status().NextRunAt; got == nil || *got != "2026-09-10T12:00:00Z" {
+		t.Fatalf("edited schedule ran again today: %v", got)
+	}
+	if _, err := s.Save(context.Background(), Settings{Enabled: true, Schedules: []Schedule{{ID: "default", Time: ptr("12:00")}, {ID: "new", Time: ptr("13:00")}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Status().NextRunAt; got == nil || *got != "2026-09-09T13:00:00Z" {
+		t.Fatalf("new schedule not eligible today: %v", got)
+	}
+	if _, err := s.Save(context.Background(), Settings{Enabled: true, Schedules: []Schedule{{ID: "new", Time: ptr("13:00")}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := s.saved.LastRunDates["default"]; exists {
+		t.Fatal("removed schedule date retained")
+	}
+	persisted, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(persisted), `"lastRunDate"`) || !strings.Contains(string(persisted), `"lastRunDates"`) {
+		t.Fatalf("legacy date not migrated: %s", persisted)
+	}
+}
+
+func TestMultipleDueSchedulesAndPlannedLocalDate(t *testing.T) {
+	s, c := newTestScheduler(t, nil, 0)
+	if _, err := s.Save(context.Background(), Settings{Enabled: true, Schedules: []Schedule{{ID: "first", Time: ptr("09:00")}, {ID: "second", Time: ptr("09:03")}}}); err != nil {
+		t.Fatal(err)
+	}
+	c.Set(time.Date(2026, 9, 9, 9, 4, 0, 0, time.UTC))
+	s.Tick()
+	s.wg.Wait()
+	if s.saved.LastRunDates["first"] != "2026-09-09" || s.saved.LastRunDates["second"] != "2026-09-09" {
+		t.Fatalf("due schedules not both claimed: %+v", s.saved.LastRunDates)
+	}
+	if s.Status().Running || s.Status().LastRun.ScheduleID != "second" {
+		t.Fatalf("unexpected latest run: %+v", s.Status())
+	}
+	// A schedule at 23:59 remains claimed for the planned date when polled after midnight.
+	c.Set(time.Date(2026, 9, 9, 23, 58, 0, 0, time.UTC))
+	if _, err := s.Save(context.Background(), Settings{Enabled: true, Schedules: []Schedule{{ID: "midnight", Time: ptr("23:59")}}}); err != nil {
+		t.Fatal(err)
+	}
+	c.Set(time.Date(2026, 9, 10, 0, 2, 0, 0, time.UTC))
+	s.Tick()
+	s.wg.Wait()
+	if s.saved.LastRunDates["midnight"] != "2026-09-09" {
+		t.Fatalf("claimed poll date instead of planned date: %+v", s.saved.LastRunDates)
+	}
+}
+
+func TestParallelBatchesKeepLatestResultAndSeparateRuntime(t *testing.T) {
+	entered, release := make(chan string, 1), make(chan struct{})
+	var calls atomic.Int32
+	var runtimesMu sync.Mutex
+	var runtimes []string
+	s, c := newTestScheduler(t, runFunc(func(ctx context.Context, cmd *exec.Cmd, _ time.Duration) (ProcessOutput, error) {
+		var home string
+		for _, item := range cmd.Env {
+			if strings.HasPrefix(item, "CODEX_HOME=") {
+				home = strings.TrimPrefix(item, "CODEX_HOME=")
+			}
+		}
+		runtimesMu.Lock()
+		runtimes = append(runtimes, filepath.Dir(filepath.Dir(home)))
+		runtimesMu.Unlock()
+		if calls.Add(1) == 1 {
+			entered <- home
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ProcessOutput{}, ctx.Err()
+			}
+		}
+		return successOutput(), nil
+	}), 1)
+	if _, err := s.Save(context.Background(), Settings{Enabled: true, Schedules: []Schedule{{ID: "first", Time: ptr("09:00")}, {ID: "second", Time: ptr("09:03")}}}); err != nil {
+		t.Fatal(err)
+	}
+	c.Set(time.Date(2026, 9, 9, 9, 0, 0, 0, time.UTC))
+	s.Tick()
+	<-entered
+	c.Set(time.Date(2026, 9, 9, 9, 3, 0, 0, time.UTC))
+	s.Tick()
+	deadline := time.After(2 * time.Second)
+	for {
+		status := s.Status()
+		if calls.Load() == 2 && status.LastRun != nil && status.LastRun.ScheduleID == "second" && status.LastRun.FinishedAt != nil {
+			if !status.Running {
+				t.Fatal("older batch still running but status false")
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("second batch did not finish: %+v", status)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	close(release)
+	s.wg.Wait()
+	status := s.Status()
+	if status.Running || status.LastRun.ScheduleID != "second" || status.LastRun.Accounts[0].Status != Success {
+		t.Fatalf("older batch overwrote latest: %+v", status)
+	}
+	runtimesMu.Lock()
+	defer runtimesMu.Unlock()
+	if len(runtimes) != 2 || runtimes[0] == runtimes[1] {
+		t.Fatalf("shared runtime: %v", runtimes)
+	}
+	for _, dir := range runtimes {
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("runtime retained: %s", dir)
+		}
 	}
 }

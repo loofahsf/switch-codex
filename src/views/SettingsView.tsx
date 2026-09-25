@@ -27,7 +27,13 @@ interface SettingsViewProps {
   onAddPendingCurrentAccount: (name: string) => Promise<boolean>;
 }
 
-const defaultSettings: Settings = { enabled: false, time: null, cliPath: null, autoSyncAuth: true };
+const defaultSettings: Settings = {
+  enabled: false,
+  schedules: [{ id: crypto.randomUUID(), time: null }],
+  cliPath: null,
+  autoSyncAuth: true
+};
+const validDailyTime = /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/;
 const statusLabels: Record<ScheduledAccountStatus, string> = {
   waiting: '等待中', running: '执行中', success: '成功', failed: '失败', interrupted: '已中断'
 };
@@ -75,7 +81,7 @@ export default function SettingsView({
   const [cliDetectionError, setCliDetectionError] = useState('');
   const [pendingName, setPendingName] = useState('');
   const [savingPending, setSavingPending] = useState(false);
-  const [selected, setSelected] = useState<{ batchStartedAt: string; accountId: string } | null>(null);
+  const [selected, setSelected] = useState<{ scheduleId: string; batchStartedAt: string; accountId: string } | null>(null);
   const [backupMode, setBackupMode] = useState<'export' | 'import' | null>(null);
   const [chosenBackup, setChosenBackup] = useState<ChosenBackupFile | null>(null);
   const [backupPassword, setBackupPassword] = useState('');
@@ -134,8 +140,27 @@ export default function SettingsView({
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (settings.enabled && !settings.time) {
-      setError('启用前请选择有效的执行时间（HH:mm:ss）');
+    if (settings.schedules.length < 1 || settings.schedules.length > 5) {
+      setError('请设置 1–5 个每日执行时间');
+      return;
+    }
+    const ids = settings.schedules.map((schedule) => schedule.id);
+    if (ids.some((id) => !id) || new Set(ids).size !== ids.length) {
+      setError('执行计划编号无效，请重新添加时间');
+      return;
+    }
+    const times = settings.schedules.map((schedule) => schedule.time);
+    if (times.some((time) => time !== null && !validDailyTime.test(time))) {
+      setError('请选择有效的执行时间（HH:mm:ss）');
+      return;
+    }
+    if (settings.enabled && times.some((time) => time === null)) {
+      setError('启用前请为每个计划选择执行时间（HH:mm:ss）');
+      return;
+    }
+    const chosenTimes = times.filter((time): time is string => time !== null);
+    if (new Set(chosenTimes).size !== chosenTimes.length) {
+      setError('每日执行时间不能重复');
       return;
     }
     setSaving(true);
@@ -248,7 +273,7 @@ export default function SettingsView({
 
   const dirty = saved !== null && JSON.stringify(saved) !== JSON.stringify(settings);
   const batch = status?.lastRun;
-  const selectedAccount = batch?.startedAt === selected?.batchStartedAt
+  const selectedAccount = batch?.scheduleId === selected?.scheduleId && batch?.startedAt === selected?.batchStartedAt
     ? batch?.accounts.find((account) => account.accountId === selected?.accountId)
     : undefined;
   const successCount = batch?.accounts.filter((account) => account.status === 'success').length ?? 0;
@@ -332,18 +357,53 @@ export default function SettingsView({
             />
           </div>
           <div className="settings-fields">
-            <label className="field">
-              <span>每日执行时间</span>
-              <TimePicker
-                className="settings-time-picker"
-                aria-label="每日执行时间"
-                format="HH:mm:ss" use12Hours={false} needConfirm={false}
-                hourStep={1} minuteStep={1} secondStep={1}
-                value={settings.time ? dayjs(`2000-01-01T${settings.time}`) : null}
-                placeholder="请选择时分秒" disabled={loading || saving}
-                onChange={(time) => { setSettings((value) => ({ ...value, time: time?.isValid() ? time.format('HH:mm:ss') : null })); setMessage(''); }}
-              />
-            </label>
+            <div className="settings-times" role="group" aria-label="每日执行时间">
+              <span className="settings-times-label">每日执行时间（{settings.schedules.length} / 5）</span>
+              {settings.schedules.map((schedule, index) => (
+                <div className="settings-time-row" key={schedule.id}>
+                  <TimePicker
+                    className="settings-time-picker"
+                    aria-label={`第 ${index + 1} 个每日执行时间`}
+                    format="HH:mm:ss" use12Hours={false} needConfirm={false}
+                    hourStep={1} minuteStep={1} secondStep={1}
+                    value={schedule.time ? dayjs(`2000-01-01T${schedule.time}`) : null}
+                    placeholder="请选择时分秒" disabled={loading || saving}
+                    onChange={(time) => {
+                      setSettings((value) => ({
+                        ...value,
+                        schedules: value.schedules.map((item) => item.id === schedule.id
+                          ? { ...item, time: time?.isValid() ? time.format('HH:mm:ss') : null }
+                          : item)
+                      }));
+                      setMessage('');
+                      setError('');
+                    }}
+                  />
+                  <Button
+                    type="text" danger htmlType="button"
+                    aria-label={`删除第 ${index + 1} 个执行时间`}
+                    disabled={loading || saving || settings.schedules.length <= 1}
+                    onClick={() => {
+                      setSettings((value) => ({ ...value, schedules: value.schedules.filter((item) => item.id !== schedule.id) }));
+                      setMessage('');
+                      setError('');
+                    }}
+                  >删除</Button>
+                </div>
+              ))}
+              <Button
+                htmlType="button" className="settings-add-time"
+                disabled={loading || saving || settings.schedules.length >= 5}
+                onClick={() => {
+                  setSettings((value) => ({
+                    ...value,
+                    schedules: [...value.schedules, { id: crypto.randomUUID(), time: null }]
+                  }));
+                  setMessage('');
+                  setError('');
+                }}
+              >添加执行时间</Button>
+            </div>
             <div className="settings-schedule">
               <span>电脑本地时区：{status?.timezone ?? '读取中…'}</span>
               <strong>下次执行：{saved?.enabled ? formatTime(status?.nextRunAt) : '未启用'}</strong>
@@ -400,17 +460,18 @@ export default function SettingsView({
               <h2>最近一次任务</h2>
               <span>{batch ? `开始于 ${formatTime(batch.startedAt)}` : '尚无执行记录'}</span>
             </div>
-            {batch && <Tag color={status?.running ? 'processing' : 'default'}>{status?.running ? '执行中' : '已结束'}</Tag>}
+            {batch && <Tag color={batch.finishedAt ? 'default' : 'processing'}>{batch.finishedAt ? '已结束' : '执行中'}</Tag>}
           </div>
           {batch ? <>
             <p className="settings-help">已处理 {finishedCount} / {batch.accounts.length} 个账号，成功 {successCount} 个{batch.finishedAt ? ` · 结束于 ${formatTime(batch.finishedAt)}` : ''}</p>
+            {batch.finishedAt && status?.running && <p className="settings-help">其他时段的任务仍在执行中。</p>}
             {batch.accounts.length === 0 ? <div className="empty-state">任务开始时没有已保存账号。</div> : (
               <div className="settings-results">
                 {batch.accounts.map((account) => (
                   <button
                     type="button" className="settings-result" key={account.accountId}
                     aria-label={`查看 ${account.accountName} 的调用详情`}
-                    onClick={() => setSelected({ batchStartedAt: batch.startedAt, accountId: account.accountId })}
+                    onClick={() => setSelected({ scheduleId: batch.scheduleId, batchStartedAt: batch.startedAt, accountId: account.accountId })}
                   >
                     <span className="settings-result-title"><strong>{account.accountName}</strong><Tag color={statusColors[account.status]}>{statusLabels[account.status]}</Tag></span>
                     <span className="settings-help">{timingText(account)}</span>

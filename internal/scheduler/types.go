@@ -1,4 +1,4 @@
-// Package scheduler executes one isolated Codex batch per local day.
+// Package scheduler executes isolated Codex batches for daily schedules.
 package scheduler
 
 import (
@@ -31,27 +31,53 @@ func promptPool(date string) []string {
 		"今天是 " + date + "。给出一份包含工作、休息和运动的三项通用今日安排。",
 		"用一句话说明如何判断一条新闻是否可信。",
 		"用一句话解释天气预报为什么会变化。",
+		"计算 48 ÷ 6 + 7，只回复结果。",
+		"计算 125 减去 39，只回复结果。",
+		"用一句话解释什么是文件备份。",
+		"用一句话解释什么是双重验证。",
+		"把“这个方案非常好”改写得更客观。",
+		"把“请尽快回复我”改写得更礼貌。",
+		"为雨天写一句不超过 20 个字的短句。",
+		"写一个关于耐心的两句微故事。",
+		"给出一个整理电脑下载文件夹的小建议。",
+		"给出一个整理待办事项的简单步骤。",
+		"列出三种不需要器材的短暂休息方式。",
+		"用一句话说明如何给文件起清晰的名字。",
 	}
 }
 
+type Schedule struct {
+	ID   string  `json:"id"`
+	Time *string `json:"time"`
+}
+
 type Settings struct {
-	Enabled      bool    `json:"enabled"`
-	Time         *string `json:"time"`
-	CLIPath      *string `json:"cliPath"`
-	AutoSyncAuth bool    `json:"autoSyncAuth"`
+	Enabled      bool       `json:"enabled"`
+	Schedules    []Schedule `json:"schedules"`
+	CLIPath      *string    `json:"cliPath"`
+	AutoSyncAuth bool       `json:"autoSyncAuth"`
 }
 
 func (s *Settings) UnmarshalJSON(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
 	var value struct {
-		Enabled      bool    `json:"enabled"`
-		Time         *string `json:"time"`
-		CLIPath      *string `json:"cliPath"`
-		AutoSyncAuth *bool   `json:"autoSyncAuth"`
+		Enabled      bool       `json:"enabled"`
+		Time         *string    `json:"time"`
+		Schedules    []Schedule `json:"schedules"`
+		CLIPath      *string    `json:"cliPath"`
+		AutoSyncAuth *bool      `json:"autoSyncAuth"`
 	}
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return err
 	}
-	s.Enabled, s.Time, s.CLIPath = value.Enabled, value.Time, value.CLIPath
+	s.Enabled, s.CLIPath = value.Enabled, value.CLIPath
+	s.Schedules = value.Schedules
+	if _, present := fields["schedules"]; !present {
+		s.Schedules = []Schedule{{ID: "default", Time: value.Time}}
+	}
 	s.AutoSyncAuth = true
 	if value.AutoSyncAuth != nil {
 		s.AutoSyncAuth = *value.AutoSyncAuth
@@ -61,8 +87,24 @@ func (s *Settings) UnmarshalJSON(raw []byte) error {
 
 func ptr(s string) *string { return &s }
 func (s *Settings) Validate() error {
-	if s.Time != nil {
-		v := *s.Time
+	if len(s.Schedules) < 1 || len(s.Schedules) > 5 {
+		return errors.New("定时预热必须设置 1–5 个时间点")
+	}
+	ids, times := map[string]bool{}, map[string]bool{}
+	for i := range s.Schedules {
+		item := &s.Schedules[i]
+		if strings.TrimSpace(item.ID) == "" || ids[item.ID] {
+			return errors.New("日程 ID 不能为空或重复")
+		}
+		ids[item.ID] = true
+		if item.Time == nil || *item.Time == "" {
+			item.Time = nil
+			if s.Enabled {
+				return errors.New("启用前请选择每个执行时间")
+			}
+			continue
+		}
+		v := *item.Time
 		if len(v) == 5 {
 			v += ":00"
 		}
@@ -70,10 +112,11 @@ func (s *Settings) Validate() error {
 		if err != nil || parsed.Format("15:04:05") != v {
 			return errors.New("执行时间必须为 HH:mm:ss，秒数为 00–59")
 		}
-		s.Time = &v
-	}
-	if s.Enabled && s.Time == nil {
-		return errors.New("启用前请选择执行时间")
+		if times[v] {
+			return errors.New("执行时间不能重复")
+		}
+		times[v] = true
+		item.Time = &v
 	}
 	if s.CLIPath != nil {
 		v := strings.TrimSpace(*s.CLIPath)
@@ -108,14 +151,16 @@ type AccountResult struct {
 	Response *string `json:"response"`
 }
 type BatchResult struct {
+	ScheduleID string          `json:"scheduleId"`
 	StartedAt  string          `json:"startedAt"`
 	FinishedAt *string         `json:"finishedAt"`
 	Accounts   []AccountResult `json:"accounts"`
 }
 type savedState struct {
-	Settings    Settings     `json:"settings"`
-	LastRunDate *string      `json:"lastRunDate"`
-	LastRun     *BatchResult `json:"lastRun"`
+	Settings     Settings          `json:"settings"`
+	LastRunDates map[string]string `json:"lastRunDates"`
+	LastRunDate  *string           `json:"lastRunDate,omitempty"`
+	LastRun      *BatchResult      `json:"lastRun"`
 }
 type RunStatus struct {
 	NextRunAt *string      `json:"nextRunAt"`
@@ -125,11 +170,11 @@ type RunStatus struct {
 	LastRun   *BatchResult `json:"lastRun"`
 }
 
-func nextRun(s Settings, now time.Time, last *string) *time.Time {
-	if !s.Enabled || s.Time == nil {
+func nextScheduleRun(item Schedule, now time.Time, last string) *time.Time {
+	if item.Time == nil {
 		return nil
 	}
-	v := *s.Time
+	v := *item.Time
 	if len(v) == 5 {
 		v += ":00"
 	}
@@ -141,7 +186,7 @@ func nextRun(s Settings, now time.Time, last *string) *time.Time {
 	// tomorrow. Only a passed (or already claimed) time rolls forward.
 	for daysAhead := 0; daysAhead < 370; daysAhead++ {
 		date := now.AddDate(0, 0, daysAhead)
-		if last != nil && date.Format("2006-01-02") <= *last {
+		if last != "" && date.Format("2006-01-02") <= last {
 			continue
 		}
 		wall := time.Date(date.Year(), date.Month(), date.Day(), clock.Hour(), clock.Minute(), clock.Second(), 0, time.UTC)
@@ -164,6 +209,31 @@ func nextRun(s Settings, now time.Time, last *string) *time.Time {
 		}
 	}
 	return nil
+}
+func nextRun(s Settings, now time.Time, dates map[string]string) *time.Time {
+	if !s.Enabled {
+		return nil
+	}
+	var earliest *time.Time
+	for _, item := range s.Schedules {
+		candidate := nextScheduleRun(item, now, dates[item.ID])
+		if candidate != nil && (earliest == nil || candidate.Before(*earliest)) {
+			earliest = candidate
+		}
+	}
+	return earliest
+}
+func migrate(saved *savedState) {
+	if saved.LastRunDates == nil {
+		saved.LastRunDates = map[string]string{}
+	}
+	if saved.LastRunDate != nil && len(saved.Settings.Schedules) > 0 {
+		id := saved.Settings.Schedules[0].ID
+		if saved.LastRunDates[id] == "" {
+			saved.LastRunDates[id] = *saved.LastRunDate
+		}
+	}
+	saved.LastRunDate = nil
 }
 func interrupt(saved *savedState, now time.Time) {
 	if b := saved.LastRun; b != nil && b.FinishedAt == nil {
