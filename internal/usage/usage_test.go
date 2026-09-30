@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"switch-codex/internal/store"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -136,12 +136,16 @@ func TestPricesLiveCacheBundled(t *testing.T) {
 	}
 }
 func TestQuotaCredentialSourceErrorsAndWindowParity(t *testing.T) {
-	dir := t.TempDir()
-	saved, current := filepath.Join(dir, "saved.json"), filepath.Join(dir, "current.json")
-	os.WriteFile(saved, []byte(`{"tokens":{"access_token":"stored","account_id":"account"}}`), 0600)
-	os.WriteFile(current, []byte(`{"tokens":{"access_token":"active","account_id":"account"}}`), 0600)
+	s := usageStore(t)
+	id := addUsageAccount(t, s, "A", usageAuth("user-a", "account", "stored"))
+	if _, err := s.SwitchAccount(id); err != nil {
+		t.Fatal(err)
+	}
+	writeTarget(t, s, usageAuth("user-a", "account", "active"))
+	var expectedToken atomic.Value
+	expectedToken.Store("active")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer active" || r.Header.Get("ChatGPT-Account-Id") != "account" {
+		if r.Header.Get("Authorization") != "Bearer "+expectedToken.Load().(string) || r.Header.Get("ChatGPT-Account-Id") != "account" {
 			t.Error("wrong credential source")
 		}
 		if r.URL.Path == "/reset-credits" {
@@ -155,29 +159,37 @@ func TestQuotaCredentialSourceErrorsAndWindowParity(t *testing.T) {
 	c.QuotaEndpoint = server.URL + "/usage"
 	c.ResetCreditsEndpoint = server.URL + "/reset-credits"
 	c.QuotaInterval = 0
-	state := store.AccountsState{TargetAuthPath: current, Accounts: []store.AccountItem{{Account: store.Account{ID: "a", Name: "A"}, AuthPath: saved, IsActive: true}}}
-	r := c.AccountQuotas(context.Background(), state)
+	r := c.AccountQuotas(context.Background(), quotaSnapshot(t, s))
 	q := r.Accounts[0]
 	if !q.Ok || q.Primary.UsedPercent != 105 || *q.Primary.WindowMinutes != 2 || q.Weekly == nil || q.Monthly == nil || *q.Credits.Balance != "12.5" || q.ResetCredits.AvailableCount != 1 || len(q.ResetCredits.Credits) != 1 || q.ResetCredits.Credits[0].ID != "credit-1" {
 		t.Fatalf("window contract differs: %+v", q)
 	}
-	if _, e := c.AccountQuota(context.Background(), state, "missing"); e == nil {
+	if _, e := c.AccountQuota(context.Background(), quotaSnapshot(t, s), "missing"); e == nil {
 		t.Fatal("missing account accepted")
 	}
-	os.WriteFile(current, []byte(`{"OPENAI_API_KEY":"synthetic"}`), 0600)
-	if q = c.AccountQuotas(context.Background(), state).Accounts[0]; q.Ok || !strings.Contains(*q.Error, "API Key") {
-		t.Fatal("API key queried")
+	writeTarget(t, s, `{"OPENAI_API_KEY":"synthetic"}`)
+	expectedToken.Store("stored")
+	if q = c.AccountQuotas(context.Background(), quotaSnapshot(t, s)).Accounts[0]; !q.Ok {
+		t.Fatal("different identity did not fall back to saved credential")
 	}
-	os.WriteFile(current, []byte(`invalid`), 0600)
-	if q = c.AccountQuotas(context.Background(), state).Accounts[0]; q.Ok {
-		t.Fatal("invalid JSON accepted")
+	writeTarget(t, s, `{"tokens":{"access_token":"identity-missing","refresh_token":"refresh","account_id":"account"}}`)
+	if q = c.AccountQuotas(context.Background(), quotaSnapshot(t, s)).Accounts[0]; !q.Ok {
+		t.Fatal("missing identity did not fall back to saved credential")
+	}
+	writeTarget(t, s, `invalid`)
+	if q = c.AccountQuotas(context.Background(), quotaSnapshot(t, s)).Accounts[0]; !q.Ok {
+		t.Fatal("invalid global credential did not fall back to saved credential")
+	}
+	apiID := addUsageAccount(t, s, "API", `{"OPENAI_API_KEY":"synthetic"}`)
+	apiResult, err := c.AccountQuota(context.Background(), quotaSnapshot(t, s), apiID)
+	if err != nil || apiResult.Accounts[0].Ok || apiResult.Accounts[0].Error == nil || !strings.Contains(*apiResult.Accounts[0].Error, "API Key") {
+		t.Fatalf("API key account was queried: %+v %v", apiResult, err)
 	}
 }
 
 func TestConsumeRateLimitResetCredit(t *testing.T) {
-	dir := t.TempDir()
-	authPath := filepath.Join(dir, "auth.json")
-	os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"stored","account_id":"account"}}`), 0600)
+	s := usageStore(t)
+	id := addUsageAccount(t, s, "A", usageAuth("user-a", "account", "stored"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer stored" || r.Header.Get("Content-Type") != "application/json" {
 			t.Error("wrong reset request")
@@ -194,12 +206,12 @@ func TestConsumeRateLimitResetCredit(t *testing.T) {
 	defer server.Close()
 	c := NewClient()
 	c.ResetCreditConsumeEndpoint = server.URL
-	state := store.AccountsState{Accounts: []store.AccountItem{{Account: store.Account{ID: "a"}, AuthPath: authPath}}}
-	result, err := c.ConsumeResetCredit(context.Background(), state, "a", "credit-1", "attempt-1")
+	snapshot := quotaSnapshot(t, s)
+	result, err := c.ConsumeResetCredit(context.Background(), snapshot, id, "credit-1", "attempt-1")
 	if err != nil || result.Code != "reset" || result.WindowsReset != 2 {
 		t.Fatalf("reset failed: result=%+v err=%v", result, err)
 	}
-	if _, err = c.ConsumeResetCredit(context.Background(), state, "missing", "", "attempt-2"); err == nil {
+	if _, err = c.ConsumeResetCredit(context.Background(), snapshot, "missing", "", "attempt-2"); err == nil {
 		t.Fatal("missing account accepted")
 	}
 }
@@ -208,11 +220,12 @@ func TestQuotaHTTPFailures(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
 			defer server.Close()
-			path := filepath.Join(t.TempDir(), "auth.json")
-			os.WriteFile(path, []byte(`{"tokens":{"access_token":"synthetic"}}`), 0600)
+			s := usageStore(t)
+			addUsageAccount(t, s, "A", usageAuth("user-a", "account", "synthetic"))
 			c := NewClient()
+			c.QuotaInterval = 0
 			c.QuotaEndpoint = server.URL
-			r := c.AccountQuotas(context.Background(), store.AccountsState{Accounts: []store.AccountItem{{AuthPath: path}}})
+			r := c.AccountQuotas(context.Background(), quotaSnapshot(t, s))
 			if r.Accounts[0].Ok || r.Accounts[0].Error == nil {
 				t.Fatal("HTTP failure was hidden")
 			}

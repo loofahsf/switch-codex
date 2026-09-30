@@ -58,6 +58,7 @@ export interface AccountItem {
 }
 
 export interface AccountsState {
+  revision: number;
   dataDir: string;
   targetAuthPath: string;
   activeAccountId: string | null;
@@ -122,6 +123,7 @@ export interface ConsumeRateLimitResetCreditResult {
 }
 
 export interface AccountQuota {
+  requestId: number;
   accountId: string;
   accountName: string;
   ok: boolean;
@@ -139,6 +141,7 @@ export interface AccountQuota {
 }
 
 export interface AccountQuotas {
+  revision: number;
   sourceUrl: string;
   accounts: AccountQuota[];
 }

@@ -174,7 +174,9 @@ interface UsageQuotaGridProps {
 }
 
 export function UsageQuotaGrid({ state, quotas }: UsageQuotaGridProps) {
-  if (!quotas?.length) {
+  const allowed = new Set(state.accounts.map((account) => account.id));
+  const visibleQuotas = quotas?.filter((quota) => allowed.has(quota.accountId));
+  if (!visibleQuotas?.length) {
     return (
       <div className="quota-grid">
         <div className="usage-empty">
@@ -186,7 +188,7 @@ export function UsageQuotaGrid({ state, quotas }: UsageQuotaGridProps) {
 
   return (
     <div className="quota-grid">
-      {quotas.map((quota) => (
+      {visibleQuotas.map((quota) => (
         <article
           className="quota-card"
           data-active={quota.accountId === state.activeAccountId ? 'true' : 'false'}

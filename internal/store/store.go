@@ -26,6 +26,7 @@ type Account struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 type index struct {
+	Revision        uint64    `json:"revision"`
 	ActiveAccountID *string   `json:"activeAccountId"`
 	Accounts        []Account `json:"accounts"`
 }
@@ -35,6 +36,7 @@ type AccountItem struct {
 	IsActive bool   `json:"isActive"`
 }
 type AccountsState struct {
+	Revision        uint64        `json:"revision"`
 	DataDir         string        `json:"dataDir"`
 	TargetAuthPath  string        `json:"targetAuthPath"`
 	ActiveAccountID *string       `json:"activeAccountId"`
@@ -72,6 +74,13 @@ type Snapshot struct {
 	err      error
 }
 
+type QuotaSnapshot struct {
+	Revision uint64
+	Accounts []Snapshot
+}
+
+var ErrTargetAuthChanged = errors.New("当前认证文件已变化")
+
 func (s Snapshot) Credentials() ([]byte, error) { return bytes.Clone(s.auth), s.err }
 
 type Store struct {
@@ -80,10 +89,11 @@ type Store struct {
 	now                     func() time.Time
 	write                   func(string, []byte, os.FileMode) error
 	rename                  func(string, string) error
+	removeMarker            func(string) error
 }
 
 func New(dataDir, targetAuthPath string) *Store {
-	return &Store{DataDir: dataDir, TargetAuthPath: targetAuthPath, now: time.Now, write: platform.WriteAtomic, rename: os.Rename}
+	return &Store{DataDir: dataDir, TargetAuthPath: targetAuthPath, now: time.Now, write: platform.WriteAtomic, rename: os.Rename, removeMarker: os.Remove}
 }
 func (s *Store) indexPath() string { return filepath.Join(s.DataDir, "accounts.json") }
 func (s *Store) authPath(id string) string {
@@ -96,6 +106,9 @@ func (s *Store) EnsureReady() error {
 		return err
 	}
 	if err := s.recoverPendingImport(); err != nil {
+		return err
+	}
+	if err := s.recoverOperation(); err != nil {
 		return err
 	}
 	if _, err := os.Stat(s.indexPath()); errors.Is(err, os.ErrNotExist) {
@@ -150,7 +163,7 @@ func (s *Store) state(i index) AccountsState {
 	for _, a := range i.Accounts {
 		items = append(items, AccountItem{Account: a, AuthPath: s.authPath(a.ID), IsActive: i.ActiveAccountID != nil && *i.ActiveAccountID == a.ID})
 	}
-	return AccountsState{DataDir: s.DataDir, TargetAuthPath: s.TargetAuthPath, ActiveAccountID: i.ActiveAccountID, Accounts: items}
+	return AccountsState{Revision: i.Revision, DataDir: s.DataDir, TargetAuthPath: s.TargetAuthPath, ActiveAccountID: i.ActiveAccountID, Accounts: items}
 }
 func (s *Store) ListAccounts() (AccountsState, error) {
 	s.mu.Lock()
@@ -161,6 +174,9 @@ func (s *Store) ListAccounts() (AccountsState, error) {
 func (s *Store) AddAccount(name, authJSON string) (AccountsState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.recoverOperation(); err != nil {
+		return AccountsState{}, err
+	}
 	normalized, err := NormalizeAuth([]byte(authJSON))
 	if err != nil {
 		return AccountsState{}, err
@@ -173,8 +189,14 @@ func (s *Store) AddAccount(name, authJSON string) (AccountsState, error) {
 func (s *Store) AddCurrentAccount(name string, auth []byte) (AccountsState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.recoverOperation(); err != nil {
+		return AccountsState{}, err
+	}
 	normalized, err := NormalizeAuth(auth)
 	if err != nil {
+		return AccountsState{}, err
+	}
+	if err := s.checkTarget(normalized); err != nil {
 		return AccountsState{}, err
 	}
 	return s.addNormalizedAccount(name, normalized, true)
@@ -189,6 +211,7 @@ func (s *Store) addNormalizedAccount(name string, normalized []byte, current boo
 	if err != nil {
 		return AccountsState{}, err
 	}
+	before := i
 	for _, a := range i.Accounts {
 		if strings.EqualFold(a.Name, name) {
 			return AccountsState{}, errors.New("已经存在同名账号")
@@ -213,17 +236,24 @@ func (s *Store) addNormalizedAccount(name string, normalized []byte, current boo
 		return AccountsState{}, err
 	}
 	i.Accounts = append(i.Accounts, a)
+	i.Revision++
 	if current {
+		if err = s.checkTarget(normalized); err != nil {
+			_ = os.RemoveAll(filepath.Dir(s.authPath(id)))
+			return AccountsState{}, err
+		}
 		i.ActiveAccountID = &id
 		err = s.save(i)
 	} else if i.ActiveAccountID == nil {
 		i.ActiveAccountID = &id
-		err = s.activateAndSave(i, normalized)
+		err = s.activateAndSave(before, i, normalized, id)
 	} else {
 		err = s.save(i)
 	}
 	if err != nil {
-		_ = os.RemoveAll(filepath.Dir(s.authPath(id)))
+		if _, pendingErr := os.Stat(s.operationPath()); errors.Is(pendingErr, os.ErrNotExist) {
+			_ = os.RemoveAll(filepath.Dir(s.authPath(id)))
+		}
 		return AccountsState{}, err
 	}
 	return s.state(i), nil
@@ -231,6 +261,9 @@ func (s *Store) addNormalizedAccount(name string, normalized []byte, current boo
 func (s *Store) RemoveAccount(id string) (AccountsState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.recoverOperation(); err != nil {
+		return AccountsState{}, err
+	}
 	i, err := s.read()
 	if err != nil {
 		return AccountsState{}, err
@@ -239,9 +272,18 @@ func (s *Store) RemoveAccount(id string) (AccountsState, error) {
 	if pos < 0 {
 		return AccountsState{}, errors.New("账号不存在")
 	}
+	before := i
 	// Rename to a tombstone first so a failed index write can restore the account.
 	dir := filepath.Dir(s.authPath(id))
 	tomb := dir + ".deleted-" + uuid.NewString()
+	i.Accounts = append(i.Accounts[:pos], i.Accounts[pos+1:]...)
+	if i.ActiveAccountID != nil && *i.ActiveAccountID == id {
+		i.ActiveAccountID = nil
+	}
+	i.Revision++
+	if err = s.beginOperation(before, i, operationMarker{Kind: "delete", ID: id, Tomb: filepath.Base(tomb)}); err != nil {
+		return AccountsState{}, err
+	}
 	moved := false
 	if _, err = os.Stat(dir); err == nil {
 		if err = s.rename(dir, tomb); err != nil {
@@ -251,16 +293,13 @@ func (s *Store) RemoveAccount(id string) (AccountsState, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return AccountsState{}, err
 	}
-	i.Accounts = append(i.Accounts[:pos], i.Accounts[pos+1:]...)
-	if i.ActiveAccountID != nil && *i.ActiveAccountID == id {
-		i.ActiveAccountID = nil
-	}
 	if err = s.save(i); err != nil {
 		if moved {
 			if restore := s.rename(tomb, dir); restore != nil {
 				return AccountsState{}, fmt.Errorf("保存账号索引失败: %w；恢复账号目录失败，凭证保留在 %s: %v", err, tomb, restore)
 			}
 		}
+		_ = s.removeMarker(s.operationPath())
 		return AccountsState{}, err
 	}
 	if moved {
@@ -268,6 +307,8 @@ func (s *Store) RemoveAccount(id string) (AccountsState, error) {
 			return s.state(i), fmt.Errorf("账号已移除，但清理凭证目录失败: %w", err)
 		}
 	}
+	// The index is committed. A leftover marker is safe and recovered on the next operation.
+	_ = s.removeMarker(s.operationPath())
 	return s.state(i), nil
 }
 func find(i index, id string) int {
@@ -281,6 +322,9 @@ func find(i index, id string) int {
 func (s *Store) SwitchAccount(id string) (AccountsState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.recoverOperation(); err != nil {
+		return AccountsState{}, err
+	}
 	i, err := s.read()
 	if err != nil {
 		return AccountsState{}, err
@@ -296,16 +340,22 @@ func (s *Store) SwitchAccount(id string) (AccountsState, error) {
 	if err != nil {
 		return AccountsState{}, err
 	}
+	before := i
 	i.ActiveAccountID = &id
-	if err = s.activateAndSave(i, b); err != nil {
+	i.Revision++
+	if err = s.activateAndSave(before, i, b, ""); err != nil {
 		return AccountsState{}, err
 	}
 	return s.state(i), nil
 }
-func (s *Store) activateAndSave(i index, auth []byte) error {
+func (s *Store) activateAndSave(before, i index, auth []byte, createdID string) error {
 	old, err := os.ReadFile(s.TargetAuthPath)
 	existed := err == nil
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	marker := operationMarker{Kind: "switch", OldTarget: old, OldTargetExists: existed, NewTargetSHA256: digestHex(auth), CreatedID: createdID}
+	if err = s.beginOperation(before, i, marker); err != nil {
 		return err
 	}
 	if existed {
@@ -318,16 +368,16 @@ func (s *Store) activateAndSave(i index, auth []byte) error {
 	}
 	if err = s.save(i); err != nil {
 		var rollback error
-		if existed {
-			rollback = s.write(s.TargetAuthPath, old, 0600)
-		} else {
-			rollback = os.Remove(s.TargetAuthPath)
-		}
+		rollback = s.restoreTargetIfOwned(marker)
 		if rollback != nil {
 			return fmt.Errorf("保存账号索引失败: %w；恢复原凭证失败，请使用备份恢复: %v", err, rollback)
 		}
+		_ = s.removeMarker(s.operationPath())
 		return err
 	}
+	// The index is committed. Cleanup failure must not turn a successful add into
+	// a caller-side credential deletion or hide a completed switch.
+	_ = s.removeMarker(s.operationPath())
 	return nil
 }
 
@@ -336,8 +386,14 @@ func (s *Store) activateAndSave(i index, auth []byte) error {
 func (s *Store) ReconcileTargetAuth(auth []byte) (ReconcileResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.recoverOperation(); err != nil {
+		return ReconcileResult{}, err
+	}
 	normalized, err := NormalizeAuth(auth)
 	if err != nil {
+		return ReconcileResult{}, err
+	}
+	if err := s.checkTarget(normalized); err != nil {
 		return ReconcileResult{}, err
 	}
 	identity, err := IdentifyAuth(normalized)
@@ -382,6 +438,9 @@ func (s *Store) ReconcileTargetAuth(auth []byte) (ReconcileResult, error) {
 	if !authChanged && isActive {
 		return result, nil
 	}
+	if err := s.checkTarget(normalized); err != nil {
+		return ReconcileResult{}, err
+	}
 	if err = s.updateSavedAuthAndActive(&i, m.pos, m.raw, normalized, authChanged, !isActive); err != nil {
 		return ReconcileResult{}, err
 	}
@@ -410,6 +469,7 @@ func (s *Store) updateSavedAuthAndActive(i *index, pos int, old, updated []byte,
 		id := i.Accounts[pos].ID
 		i.ActiveAccountID = &id
 	}
+	i.Revision++
 	if err := s.save(*i); err != nil {
 		if updateAuth {
 			if restore := s.write(path, old, 0600); restore != nil {
@@ -437,9 +497,42 @@ func (s *Store) Snapshots() ([]Snapshot, error) {
 	}
 	return result, nil
 }
+
+func (s *Store) QuotaSnapshots() (QuotaSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, err := s.read()
+	if err != nil {
+		return QuotaSnapshot{}, err
+	}
+	result := QuotaSnapshot{Revision: i.Revision, Accounts: make([]Snapshot, 0, len(i.Accounts))}
+	var target []byte
+	var targetIdentity CredentialIdentity
+	target, targetErr := os.ReadFile(s.TargetAuthPath)
+	if targetErr == nil {
+		targetIdentity, targetErr = IdentifyAuth(target)
+	}
+	for _, a := range i.Accounts {
+		saved, readErr := os.ReadFile(s.authPath(a.ID))
+		if readErr != nil {
+			readErr = errors.New("无法读取账号认证文件")
+		}
+		selected := saved
+		if readErr == nil && targetErr == nil && i.ActiveAccountID != nil && *i.ActiveAccountID == a.ID {
+			if savedIdentity, identityErr := IdentifyAuth(saved); identityErr == nil && savedIdentity.Equal(targetIdentity) {
+				selected = target
+			}
+		}
+		result.Accounts = append(result.Accounts, Snapshot{ID: a.ID, Name: a.Name, auth: bytes.Clone(selected), err: readErr})
+	}
+	return result, nil
+}
 func (s *Store) PersistRefreshedAuth(id string, original, refreshed []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.recoverOperation(); err != nil {
+		return err
+	}
 	if bytes.Equal(original, refreshed) {
 		return nil
 	}

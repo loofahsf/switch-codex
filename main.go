@@ -68,6 +68,9 @@ func main() {
 			svc.manualWarmup, initErr = scheduler.NewManualWarmup(svc.store, scheduler.Options{})
 		}
 		if initErr == nil {
+			svc.quotaRefresh = newQuotaRefresher(ctx, svc.refreshQuotaAccounts, func(quotas usage.AccountQuotas) {
+				svc.emit("account-quotas-changed", quotas)
+			})
 			svc.authSync = authsync.New(svc.store, authsync.Options{
 				Enabled:         svc.scheduler.Settings().AutoSyncAuth,
 				Emit:            func(status authsync.Status) { a.Event.Emit("auth-sync-changed", status) },
@@ -109,6 +112,9 @@ func main() {
 		}
 		if svc.manualWarmup != nil {
 			svc.manualWarmup.Close()
+		}
+		if svc.quotaRefresh != nil {
+			svc.quotaRefresh.Close()
 		}
 		if svc.scheduler != nil {
 			svc.scheduler.Close()

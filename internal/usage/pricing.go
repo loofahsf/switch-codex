@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"switch-codex/internal/platform"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,10 +32,16 @@ type Client struct {
 	ResetCreditConsumeEndpoint                           string
 	Now                                                  func() time.Time
 	QuotaInterval                                        time.Duration
+	quotaMu                                              sync.Mutex
+	quotaFlights                                         map[quotaKey]*quotaFlight
+	quotaEpochs                                          map[string]uint64
+	quotaSequence                                        atomic.Uint64
+	quotaGate                                            chan struct{}
+	nextQuotaStart                                       time.Time
 }
 
 func NewClient() *Client {
-	return &Client{HTTP: &http.Client{Timeout: 12 * time.Second}, PricingEndpoint: PricingURL, QuotaEndpoint: QuotaURL, ResetCreditsEndpoint: ResetCreditsURL, ResetCreditConsumeEndpoint: ResetCreditConsumeURL, Now: time.Now, QuotaInterval: 3 * time.Second}
+	return &Client{HTTP: &http.Client{Timeout: 12 * time.Second}, PricingEndpoint: PricingURL, QuotaEndpoint: QuotaURL, ResetCreditsEndpoint: ResetCreditsURL, ResetCreditConsumeEndpoint: ResetCreditConsumeURL, Now: time.Now, QuotaInterval: 3 * time.Second, quotaGate: make(chan struct{}, 1)}
 }
 
 type catalog struct {

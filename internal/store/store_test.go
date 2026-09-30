@@ -278,15 +278,25 @@ func TestCompositeIdentityAndReconciliation(t *testing.T) {
 	if !bytes.Contains(savedBeta, []byte("new")) {
 		t.Fatal("matched account was not refreshed")
 	}
+	if err = os.WriteFile(s.TargetAuthPath, userAuth("user-b", "team", "newer"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	r, err = s.ReconcileTargetAuth(userAuth("user-b", "team", "newer"))
 	if err != nil || r.Outcome != ReconcileSynced {
 		t.Fatal("active account was not synchronized")
+	}
+	if err = os.WriteFile(s.TargetAuthPath, userAuth("user-c", "team", "unknown"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	r, err = s.ReconcileTargetAuth(userAuth("user-c", "team", "unknown"))
 	if err != nil || r.Outcome != ReconcileUnknown {
 		t.Fatal("unknown member was not isolated")
 	}
-	r, err = s.ReconcileTargetAuth([]byte(`{"tokens":{"account_id":"team","refresh_token":"legacy"}}`))
+	legacy := []byte(`{"tokens":{"account_id":"team","refresh_token":"legacy"}}`)
+	if err = os.WriteFile(s.TargetAuthPath, legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.ReconcileTargetAuth(legacy)
 	if err != nil || r.Outcome != ReconcileIdentityMissing {
 		t.Fatal("credential without a user identity was accepted")
 	}

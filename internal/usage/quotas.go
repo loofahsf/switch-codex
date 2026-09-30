@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"switch-codex/internal/store"
@@ -21,40 +20,31 @@ type accountAuth struct {
 	AccountID   string
 }
 
-func (c *Client) AccountQuotas(ctx context.Context, state store.AccountsState) AccountQuotas {
-	result := AccountQuotas{SourceURL: QuotaURL, Accounts: make([]AccountQuota, 0, len(state.Accounts))}
-	for i, a := range state.Accounts {
-		if i > 0 {
-			timer := time.NewTimer(c.QuotaInterval)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-			case <-timer.C:
-			}
+func (c *Client) AccountQuotas(ctx context.Context, snapshot store.QuotaSnapshot) AccountQuotas {
+	result := AccountQuotas{Revision: snapshot.Revision, SourceURL: QuotaURL, Accounts: make([]AccountQuota, 0, len(snapshot.Accounts))}
+	for _, a := range snapshot.Accounts {
+		if ctx.Err() != nil {
+			break
 		}
-		result.Accounts = append(result.Accounts, c.accountQuota(ctx, state, a))
+		result.Accounts = append(result.Accounts, c.queryQuota(ctx, a))
 	}
 	return result
 }
-func (c *Client) AccountQuota(ctx context.Context, state store.AccountsState, id string) (AccountQuotas, error) {
-	for _, a := range state.Accounts {
+func (c *Client) AccountQuota(ctx context.Context, snapshot store.QuotaSnapshot, id string) (AccountQuotas, error) {
+	for _, a := range snapshot.Accounts {
 		if a.ID == id {
-			return AccountQuotas{SourceURL: QuotaURL, Accounts: []AccountQuota{c.accountQuota(ctx, state, a)}}, nil
+			return AccountQuotas{Revision: snapshot.Revision, SourceURL: QuotaURL, Accounts: []AccountQuota{c.queryQuota(ctx, a)}}, nil
 		}
 	}
 	return AccountQuotas{}, errors.New("账号不存在")
 }
-func quotaError(a store.AccountItem, message string) AccountQuota {
+func quotaError(a store.Snapshot, message string) AccountQuota {
 	return AccountQuota{AccountID: a.ID, AccountName: a.Name, Error: strptr(message)}
 }
 
-func readAccountAuth(state store.AccountsState, a store.AccountItem) (accountAuth, error) {
-	// 当前账号可能已由 Codex 刷新凭据，查询时优先读取正在生效的 auth.json。
-	path := a.AuthPath
-	if a.IsActive {
-		path = state.TargetAuthPath
-	}
-	raw, err := os.ReadFile(path)
+func readAccountAuth(a store.Snapshot) (accountAuth, error) {
+	// Store selected this immutable credential while holding its account lock.
+	raw, err := a.Credentials()
 	if err != nil {
 		return accountAuth{}, errors.New("无法读取该账号的 auth.json")
 	}
@@ -95,9 +85,9 @@ func newAccountRequest(ctx context.Context, method, endpoint string, auth accoun
 	return req, nil
 }
 
-func (c *Client) accountQuota(ctx context.Context, state store.AccountsState, a store.AccountItem) AccountQuota {
+func (c *Client) accountQuota(ctx context.Context, a store.Snapshot) AccountQuota {
 	// 读取账号自身凭据，确保多账号查询互不串号。
-	auth, err := readAccountAuth(state, a)
+	auth, err := readAccountAuth(a)
 	if err != nil {
 		return quotaError(a, err.Error())
 	}
@@ -244,12 +234,12 @@ func (c *Client) listResetCredits(ctx context.Context, auth accountAuth) (RateLi
 	return RateLimitResetCredits{AvailableCount: result.AvailableCount, Credits: credits}, nil
 }
 
-func (c *Client) ConsumeResetCredit(ctx context.Context, state store.AccountsState, accountID, creditID, redeemRequestID string) (ConsumeRateLimitResetCreditResult, error) {
+func (c *Client) ConsumeResetCredit(ctx context.Context, snapshot store.QuotaSnapshot, accountID, creditID, redeemRequestID string) (ConsumeRateLimitResetCreditResult, error) {
 	// 先锁定用户选择的账号，避免使用当前激活账号替代目标账号。
-	var account *store.AccountItem
-	for i := range state.Accounts {
-		if state.Accounts[i].ID == accountID {
-			account = &state.Accounts[i]
+	var account *store.Snapshot
+	for i := range snapshot.Accounts {
+		if snapshot.Accounts[i].ID == accountID {
+			account = &snapshot.Accounts[i]
 			break
 		}
 	}
@@ -259,7 +249,7 @@ func (c *Client) ConsumeResetCredit(ctx context.Context, state store.AccountsSta
 	if strings.TrimSpace(redeemRequestID) == "" {
 		return ConsumeRateLimitResetCreditResult{}, errors.New("重置请求标识不能为空")
 	}
-	auth, err := readAccountAuth(state, *account)
+	auth, err := readAccountAuth(*account)
 	if err != nil {
 		return ConsumeRateLimitResetCreditResult{}, err
 	}

@@ -30,6 +30,10 @@ func (s *AppService) accountMenu(menu *application.Menu, state store.AccountsSta
 	}
 }
 func (s *AppService) rebuildMenus(state store.AccountsState) {
+	if state.Revision < s.menuRevision {
+		return
+	}
+	s.menuRevision = state.Revision
 	m := application.NewMenu()
 	m.AddRole(application.AppMenu)
 	accounts := m.AddSubmenu("账号")

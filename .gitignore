@@ -31,6 +31,7 @@ build/windows/MicrosoftEdgeWebview2Setup.exe
 /data/accounts/*
 !/data/accounts/.gitkeep
 /data/accounts.json
+/data/accounts-*.pending.json
 /data/settings.json
 /data/scheduled-runtime/
 /data/manual-runtime/

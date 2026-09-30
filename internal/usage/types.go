@@ -114,6 +114,7 @@ type ConsumeRateLimitResetCreditResult struct {
 }
 
 type AccountQuota struct {
+	RequestID    uint64                 `json:"requestId"`
 	AccountID    string                 `json:"accountId"`
 	AccountName  string                 `json:"accountName"`
 	Ok           bool                   `json:"ok"`
@@ -131,6 +132,7 @@ type AccountQuota struct {
 }
 
 type AccountQuotas struct {
+	Revision  uint64         `json:"revision"`
 	SourceURL string         `json:"sourceUrl"`
 	Accounts  []AccountQuota `json:"accounts"`
 }

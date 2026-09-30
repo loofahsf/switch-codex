@@ -28,8 +28,11 @@ type AppService struct {
 	window         *application.WebviewWindow
 	tray           *application.SystemTray
 	menu, trayMenu *application.Menu
+	menuRevision   uint64
+	emitEvent      func(string, any)
 	store          *store.Store
 	usage          *usage.Client
+	quotaRefresh   *quotaRefresher
 	scheduler      *scheduler.Scheduler
 	manualWarmup   *scheduler.ManualWarmup
 	authSync       *authsync.Service
@@ -75,7 +78,7 @@ func (s *AppService) AddAccount(name, authJSON string) (store.AccountsState, err
 }
 func (s *AppService) RemoveAccount(accountID string) (store.AccountsState, error) {
 	state, err := s.store.RemoveAccount(accountID)
-	if err == nil {
+	if err == nil || state.DataDir != "" {
 		s.notify(state)
 		s.authSync.Trigger(true)
 	}
@@ -103,27 +106,28 @@ func (s *AppService) GetUsageStats(days uint32, refreshPrices *bool) (usage.Usag
 	return s.usage.UsageStats(s.ctx, s.priceDir, filepath.Join(s.home, ".codex", "sessions"), days, refreshPrices != nil && *refreshPrices)
 }
 func (s *AppService) GetAccountQuotas() (usage.AccountQuotas, error) {
-	state, err := s.store.ListAccounts()
+	snapshot, err := s.store.QuotaSnapshots()
 	if err != nil {
 		return usage.AccountQuotas{}, err
 	}
-	return s.usage.AccountQuotas(s.ctx, state), nil
+	return s.usage.AccountQuotas(s.ctx, snapshot), nil
 }
 func (s *AppService) GetAccountQuota(accountID string) (usage.AccountQuotas, error) {
-	state, err := s.store.ListAccounts()
+	snapshot, err := s.store.QuotaSnapshots()
 	if err != nil {
 		return usage.AccountQuotas{}, err
 	}
-	return s.usage.AccountQuota(s.ctx, state, accountID)
+	return s.usage.AccountQuota(s.ctx, snapshot, accountID)
 }
 func (s *AppService) ConsumeRateLimitResetCredit(accountID, creditID, redeemRequestID string) (usage.ConsumeRateLimitResetCreditResult, error) {
 	// 使用存储层当前快照解析目标账号，避免前端传入任意凭据或文件路径。
-	state, err := s.store.ListAccounts()
+	snapshot, err := s.store.QuotaSnapshots()
 	if err != nil {
 		return usage.ConsumeRateLimitResetCreditResult{}, err
 	}
 	// 消费结果只代表本次请求，额度和剩余卡片由前端随后重新查询。
-	return s.usage.ConsumeResetCredit(s.ctx, state, accountID, creditID, redeemRequestID)
+	defer s.usage.InvalidateQuotas([]string{accountID})
+	return s.usage.ConsumeResetCredit(s.ctx, snapshot, accountID, creditID, redeemRequestID)
 }
 func (s *AppService) WarmupAccount(accountID string) error {
 	if s.manualWarmup == nil || s.scheduler == nil {
@@ -132,7 +136,7 @@ func (s *AppService) WarmupAccount(accountID string) error {
 	// CLI configuration is shared, but the manual executor deliberately does
 	// not inspect or mutate any scheduled-task state.
 	configuredCLI := s.scheduler.Settings().CLIPath
-	defer s.refreshAccountsAfterWarmup(s.ctx)
+	defer s.queueWarmupRefresh([]string{accountID})
 	return s.manualWarmup.WarmupAccount(accountID, configuredCLI)
 }
 func (s *AppService) WarmupAllAccounts() error {
@@ -325,13 +329,32 @@ func (s *AppService) Confirm(message string, options ConfirmOptions) (bool, erro
 func (s *AppService) notify(state store.AccountsState) {
 	// Queue native menu work, never wait for the UI thread while holding a store
 	// lock. A synchronous main-thread round trip deadlocked the old Tauri version.
-	application.InvokeAsync(func() { s.rebuildMenus(state) })
-	s.app.Event.Emit("accounts-changed", state)
+	if s.app != nil {
+		application.InvokeAsync(func() { s.rebuildMenus(state) })
+	}
+	s.emit("accounts-changed", state)
 }
 
-// refreshAccountsAfterWarmup only refreshes account-facing data after either
-// execution path completes. It does not read or update scheduled task state.
+func (s *AppService) emit(event string, data any) {
+	if s.emitEvent != nil {
+		s.emitEvent(event, data)
+	} else if s.app != nil {
+		s.app.Event.Emit(event, data)
+	}
+}
+
+// Completion returns before network refreshes. The application owns their
+// lifetime so shutdown cancels and waits for them before releasing the store.
 func (s *AppService) refreshAccountsAfterWarmup(ctx context.Context) {
+	if ctx.Err() == nil {
+		s.queueWarmupRefresh(nil)
+	}
+}
+
+func (s *AppService) queueWarmupRefresh(ids []string) {
+	if s.ctx.Err() != nil {
+		return
+	}
 	state, err := s.store.ListAccounts()
 	if err != nil {
 		return
@@ -340,8 +363,33 @@ func (s *AppService) refreshAccountsAfterWarmup(ctx context.Context) {
 	if s.authSync != nil {
 		s.authSync.Trigger(true)
 	}
-	quotas := s.usage.AccountQuotas(ctx, state)
-	if ctx.Err() == nil {
-		s.app.Event.Emit("account-quotas-changed", quotas)
+	if ids == nil {
+		ids = make([]string, 0, len(state.Accounts))
+		for _, account := range state.Accounts {
+			ids = append(ids, account.ID)
+		}
 	}
+	s.usage.InvalidateQuotas(ids)
+	if s.quotaRefresh != nil {
+		s.quotaRefresh.Queue(ids)
+	}
+}
+
+func (s *AppService) refreshQuotaAccounts(ctx context.Context, ids []string) (usage.AccountQuotas, error) {
+	snapshot, err := s.store.QuotaSnapshots()
+	if err != nil {
+		return usage.AccountQuotas{}, err
+	}
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	selected := make([]store.Snapshot, 0, len(ids))
+	for _, account := range snapshot.Accounts {
+		if wanted[account.ID] {
+			selected = append(selected, account)
+		}
+	}
+	snapshot.Accounts = selected
+	return s.usage.AccountQuotas(ctx, snapshot), nil
 }

@@ -335,6 +335,9 @@ func (s *Store) ImportAccountsBackup(backup *AccountsBackup) (AccountsState, err
 	if err != nil {
 		return AccountsState{}, err
 	}
+	if err := s.recoverOperation(); err != nil {
+		return AccountsState{}, err
+	}
 	if len(current.Accounts) != 0 {
 		return AccountsState{}, errors.New("仅允许导入到没有账号的目标库")
 	}
@@ -364,7 +367,7 @@ func (s *Store) ImportAccountsBackup(backup *AccountsBackup) (AccountsState, err
 		authByID[id] = bytes.Clone(imported.Auth)
 		ids = append(ids, id)
 	}
-	next := index{ActiveAccountID: nil, Accounts: accounts}
+	next := index{Revision: current.Revision + 1, ActiveAccountID: nil, Accounts: accounts}
 	indexBytes, err := marshalIndex(next)
 	if err != nil {
 		return AccountsState{}, err

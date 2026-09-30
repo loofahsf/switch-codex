@@ -11,6 +11,7 @@ export interface AccountItem {
 }
 
 export interface AccountsState {
+    "revision": number;
     "dataDir": string;
     "targetAuthPath": string;
     "activeAccountId": string | null;

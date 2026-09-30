@@ -5,6 +5,11 @@ import AccountsView from './views/AccountsView';
 import UsageView from './views/UsageView';
 import SettingsView from './views/SettingsView';
 import { confirm, getErrorMessage, invoke, listen } from './platform';
+import {
+  applyAccounts, applyAuthSyncEvent, applyAuthSyncQuery, applyQuotas,
+  completeUsage, emptyAccountData, hasMissingQuotas, invalidateUsage, missingQuotaIDs
+} from './accountState';
+import type { AccountData, AuthSyncData, UsageFreshness } from './accountState';
 import type {
   AccountItem,
   AccountQuotas,
@@ -18,6 +23,7 @@ import type {
 } from './types';
 
 const emptyState: AccountsState = {
+  revision: 0,
   dataDir: '',
   targetAuthPath: '',
   activeAccountId: null,
@@ -90,10 +96,54 @@ export default function App() {
   const warmingAccountIdsRef = useRef(new Set<string>());
   const warmingAllAccountsRef = useRef(false);
   const followedAtRef = useRef<string | null>(null);
+  const accountDataRef = useRef<AccountData>(emptyAccountData);
+  const accountEventGenerationRef = useRef(0);
+  const authSyncDataRef = useRef<AuthSyncData>({ status: emptyAuthSyncStatus, eventGeneration: 0 });
+  const usageFreshnessRef = useRef<UsageFreshness>({ epoch: 0, completedEpoch: -1 });
+  const usageRefreshRef = useRef<() => void>(() => {});
+  const missingQuotaRefreshRef = useRef<() => void>(() => {});
+  const missingQuotaRequestsRef = useRef(new Set<string>());
 
-  const updateQuotas = useCallback((nextQuotas: AccountQuotas | null) => {
-    quotasRef.current = nextQuotas;
-    setQuotas(nextQuotas);
+  const applyAccountState = useCallback((nextState: AccountsState) => {
+    const previous = accountDataRef.current;
+    const next = applyAccounts(previous, nextState);
+    if (next === previous) return;
+    accountDataRef.current = next;
+    setState(next.accounts ?? emptyState);
+    quotasRef.current = next.quotas;
+    setQuotas(next.quotas);
+    const oldIds = previous.accounts?.accounts.map((account) => account.id).join('\u0000');
+    const newIds = next.accounts?.accounts.map((account) => account.id).join('\u0000');
+    if (oldIds !== newIds) {
+      usageFreshnessRef.current = invalidateUsage(usageFreshnessRef.current);
+      if (viewRef.current === 'usage' && usageLoadedRef.current && !usageLoadingRef.current) {
+        queueMicrotask(() => usageRefreshRef.current());
+      }
+    } else if (viewRef.current === 'usage' && usageLoadedRef.current &&
+      !usageLoadingRef.current && hasMissingQuotas(next)) {
+      queueMicrotask(() => missingQuotaRefreshRef.current());
+    }
+  }, []);
+
+  const updateQuotas = useCallback((nextQuotas: AccountQuotas) => {
+    const previous = accountDataRef.current;
+    const next = applyQuotas(previous, nextQuotas);
+    if (next === previous) return;
+    accountDataRef.current = next;
+    quotasRef.current = next.quotas;
+    setQuotas(next.quotas);
+  }, []);
+
+  const updateAuthSyncEvent = useCallback((nextStatus: AuthSyncStatus) => {
+    const next = applyAuthSyncEvent(authSyncDataRef.current, nextStatus);
+    authSyncDataRef.current = next;
+    setAuthSyncStatus(next.status);
+  }, []);
+
+  const updateAuthSyncQuery = useCallback((nextStatus: AuthSyncStatus, generation: number) => {
+    const next = applyAuthSyncQuery(authSyncDataRef.current, nextStatus, generation);
+    authSyncDataRef.current = next;
+    setAuthSyncStatus(next.status);
   }, []);
 
   const refreshUsage = useCallback(
@@ -107,6 +157,7 @@ export default function App() {
       }
 
       usageLoadingRef.current = true;
+      const startedEpoch = usageFreshnessRef.current.epoch;
       setUsageLoading(true);
       const loadingText = refreshPrices
         ? '正在读取 OpenAI 官方用量与价格…'
@@ -122,14 +173,15 @@ export default function App() {
         });
         const quotasPromise: Promise<AccountQuotas | null> = refreshQuotas
           ? invoke<AccountQuotas>('get_account_quotas')
-          : Promise.resolve(quotasRef.current);
+          : Promise.resolve(null);
         const [nextStats, nextQuotas] = await Promise.all([statsPromise, quotasPromise]);
 
-        setUsageStats(nextStats);
+        if (startedEpoch === usageFreshnessRef.current.epoch) setUsageStats(nextStats);
         if (nextQuotas) {
           updateQuotas(nextQuotas);
         }
-        usageLoadedRef.current = true;
+        usageFreshnessRef.current = completeUsage(usageFreshnessRef.current, startedEpoch);
+        usageLoadedRef.current = usageFreshnessRef.current.completedEpoch === usageFreshnessRef.current.epoch;
 
         const warning = nextStats.pricingSource.warning;
         const unpriced = nextStats.summary.unpricedModelCount;
@@ -148,41 +200,43 @@ export default function App() {
       } finally {
         usageLoadingRef.current = false;
         setUsageLoading(false);
+        if (viewRef.current === 'usage' && startedEpoch !== usageFreshnessRef.current.epoch) {
+          queueMicrotask(() => usageRefreshRef.current());
+        } else if (viewRef.current === 'usage' && hasMissingQuotas(accountDataRef.current)) {
+          queueMicrotask(() => missingQuotaRefreshRef.current());
+        }
       }
     },
     [updateQuotas]
   );
+  usageRefreshRef.current = () => {
+    void refreshUsage({ refreshPrices: false, refreshQuotas: hasMissingQuotas(accountDataRef.current) });
+  };
+  missingQuotaRefreshRef.current = () => {
+    const data = accountDataRef.current;
+    for (const accountId of missingQuotaIDs(data)) {
+      const key = `${data.accounts?.revision ?? 0}\u0000${accountId}`;
+      if (missingQuotaRequestsRef.current.has(key)) continue;
+      missingQuotaRequestsRef.current.add(key);
+      void invoke<AccountQuotas>('get_account_quota', { accountId })
+        .then(updateQuotas)
+        .catch((error) => {
+          if (accountDataRef.current.accounts?.accounts.some((account) => account.id === accountId)) {
+            setUsageMessage({ text: getErrorMessage(error, '额度查询失败'), type: 'error' });
+          }
+        })
+        .finally(() => missingQuotaRequestsRef.current.delete(key));
+    }
+  };
 
   useEffect(() => {
     let disposed = false;
     const unlisteners: Array<() => void> = [];
 
-    invoke<AccountsState>('list_accounts')
-      .then((nextState) => {
-        if (!disposed) setState(nextState);
-      })
-      .catch((error) => {
-        if (!disposed) {
-          setAccountMessage({ text: getErrorMessage(error, '读取账号失败'), type: 'error' });
-        }
-      });
-
-    invoke<AuthSyncStatus>('get_auth_sync_status')
-      .then((nextStatus) => {
-        if (!disposed) setAuthSyncStatus(nextStatus);
-      })
-      .catch((error) => {
-        if (!disposed) {
-          setAccountMessage({ text: getErrorMessage(error, '读取自动同步状态失败'), type: 'error' });
-        }
-      });
-
     listen<AccountsState>('accounts-changed', (nextState) => {
       if (disposed) return;
-      setState(nextState);
-      if (usageLoadedRef.current && viewRef.current === 'usage') {
-        void refreshUsage({ refreshPrices: false, refreshQuotas: true });
-      }
+      accountEventGenerationRef.current += 1;
+      applyAccountState(nextState);
     }).then((unlisten) => {
       if (disposed) unlisten();
       else unlisteners.push(unlisten);
@@ -204,7 +258,7 @@ export default function App() {
 
     listen<AuthSyncStatus>('auth-sync-changed', (nextStatus) => {
       if (disposed) return;
-      setAuthSyncStatus(nextStatus);
+      updateAuthSyncEvent(nextStatus);
       if (nextStatus.state === 'followed' && nextStatus.checkedAt !== followedAtRef.current) {
         followedAtRef.current = nextStatus.checkedAt;
         void toast.success(nextStatus.message || '已跟随当前认证文件切换账号');
@@ -225,11 +279,30 @@ export default function App() {
       console.error('Failed to listen for account-quotas-changed:', error);
     });
 
+    const accountGeneration = accountEventGenerationRef.current;
+    invoke<AccountsState>('list_accounts')
+      .then((nextState) => {
+        if (!disposed && (accountGeneration === accountEventGenerationRef.current ||
+          (nextState.revision ?? 0) > (accountDataRef.current.accounts?.revision ?? 0))) {
+          applyAccountState(nextState);
+        }
+      })
+      .catch((error) => {
+        if (!disposed) setAccountMessage({ text: getErrorMessage(error, '读取账号失败'), type: 'error' });
+      });
+
+    const authSyncGeneration = authSyncDataRef.current.eventGeneration;
+    invoke<AuthSyncStatus>('get_auth_sync_status')
+      .then((nextStatus) => { if (!disposed) updateAuthSyncQuery(nextStatus, authSyncGeneration); })
+      .catch((error) => {
+        if (!disposed) setAccountMessage({ text: getErrorMessage(error, '读取自动同步状态失败'), type: 'error' });
+      });
+
     return () => {
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [refreshUsage, toast, updateQuotas]);
+  }, [applyAccountState, toast, updateAuthSyncEvent, updateAuthSyncQuery, updateQuotas]);
 
   function changeSidebarCollapsed(collapsed: boolean) {
     setSidebarCollapsed(collapsed);
@@ -243,8 +316,9 @@ export default function App() {
   function changeView(nextView: ViewName) {
     viewRef.current = nextView;
     setView(nextView);
-    if (nextView === 'usage' && !usageLoadedRef.current) {
-      void refreshUsage();
+    if (nextView === 'usage') {
+      if (!usageLoadedRef.current) void refreshUsage();
+      else if (hasMissingQuotas(accountDataRef.current)) void refreshAccountQuotas();
     }
   }
 
@@ -269,7 +343,7 @@ export default function App() {
     try {
       setAccountMessage({ text: '正在保存账号...', type: 'neutral' });
       const nextState = await invoke<AccountsState>('add_account', { name, authJson });
-      setState(nextState);
+      applyAccountState(nextState);
       setAccountMessage({ text: '账号已添加', type: 'success' });
       return true;
     } catch (error) {
@@ -281,7 +355,7 @@ export default function App() {
   async function switchAccount(account: AccountItem) {
     try {
       const nextState = await invoke<AccountsState>('switch_account', { accountId: account.id });
-      setState(nextState);
+      applyAccountState(nextState);
       const text = `已切换到「${account.name}」，~/.codex/auth.json 已更新`;
       setAccountMessage({ text, type: 'success' });
       void toast.success(text);
@@ -296,7 +370,8 @@ export default function App() {
     if (authSyncLoading) return;
     setAuthSyncLoading(true);
     try {
-      setAuthSyncStatus(await invoke<AuthSyncStatus>('check_auth_sync_now'));
+      const generation = authSyncDataRef.current.eventGeneration;
+      updateAuthSyncQuery(await invoke<AuthSyncStatus>('check_auth_sync_now'), generation);
     } catch (error) {
       const text = getErrorMessage(error, '检查认证文件失败');
       setAccountMessage({ text, type: 'error' });
@@ -313,7 +388,7 @@ export default function App() {
         pendingId: authSyncStatus.pendingId,
         name
       });
-      setState(nextState);
+      applyAccountState(nextState);
       setAccountMessage({ text: '当前登录账号已保存', type: 'success' });
       return true;
     } catch (error) {
@@ -333,7 +408,7 @@ export default function App() {
 
     try {
       const nextState = await invoke<AccountsState>('remove_account', { accountId: account.id });
-      setState(nextState);
+      applyAccountState(nextState);
       setAccountMessage({ text: '账号已删除', type: 'success' });
     } catch (error) {
       setAccountMessage({ text: getErrorMessage(error, '删除账号失败'), type: 'error' });
@@ -362,19 +437,7 @@ export default function App() {
     setRefreshingQuotaAccountId(account.id);
     try {
       const result = await invoke<AccountQuotas>('get_account_quota', { accountId: account.id });
-      const quota = result.accounts[0];
-      if (!quota) return;
-
-      const previous = quotasRef.current;
-      const accounts = previous?.accounts ?? [];
-      const existingIndex = accounts.findIndex((item) => item.accountId === quota.accountId);
-      const nextAccounts = [...accounts];
-      if (existingIndex >= 0) {
-        nextAccounts[existingIndex] = quota;
-      } else {
-        nextAccounts.push(quota);
-      }
-      updateQuotas({ sourceUrl: result.sourceUrl, accounts: nextAccounts });
+      updateQuotas(result);
     } catch (error) {
       const text = getErrorMessage(error, '额度查询失败');
       setAccountMessage({ text, type: 'error' });
@@ -438,7 +501,7 @@ export default function App() {
     try {
       setAccountMessage({ text: `正在预热「${account.name}」…`, type: 'neutral' });
       await invoke<void>('warmup_account', { accountId: account.id });
-      const text = `已预热「${account.name}」，额度已刷新`;
+      const text = `已预热「${account.name}」，正在刷新额度`;
       setAccountMessage({ text, type: 'success' });
       void toast.success(text);
     } catch (error) {
@@ -462,7 +525,7 @@ export default function App() {
     try {
       setAccountMessage({ text: '正在按随机延迟预热全部账号…', type: 'neutral' });
       await invoke<void>('warmup_all_accounts');
-      const text = '全部账号预热完成，额度已刷新';
+      const text = '全部账号预热完成，正在刷新额度';
       setAccountMessage({ text, type: 'success' });
       void toast.success(text);
     } catch (error) {

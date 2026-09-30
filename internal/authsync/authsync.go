@@ -215,29 +215,48 @@ func (s *Service) check(force, announce bool) {
 		s.publish(current)
 	}
 	now := s.opts.Now().UTC().Format(time.RFC3339Nano)
-	auth, err := s.readNormalized()
-	if err != nil {
-		s.publish(s.failureStatus(err, now))
-		return
+	var auth []byte
+	var digest [sha256.Size]byte
+	var result store.ReconcileResult
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		auth, err = s.readNormalized()
+		if err != nil {
+			s.publish(s.failureStatus(err, now))
+			return
+		}
+		digest = sha256.Sum256(auth)
+		s.mu.Lock()
+		unchanged := !force && s.hasDigest && s.digest == digest
+		if unchanged {
+			s.status.CheckedAt = &now
+		}
+		s.mu.Unlock()
+		if unchanged {
+			return
+		}
+		result, err = s.store.ReconcileTargetAuth(auth)
+		if !errors.Is(err, store.ErrTargetAuthChanged) {
+			break
+		}
+		// A switch or credential refresh won the store lock after this read.
+		// Re-read rather than applying the now obsolete credential snapshot.
+		force = true
+		if attempt < 2 && !s.opts.Wait(s.ctx, 100*time.Millisecond) {
+			return
+		}
 	}
-	digest := sha256.Sum256(auth)
-	s.mu.Lock()
-	unchanged := !force && s.hasDigest && s.digest == digest
-	if unchanged {
-		s.status.CheckedAt = &now
-	}
-	s.mu.Unlock()
-	if unchanged {
-		return
-	}
-	result, err := s.store.ReconcileTargetAuth(auth)
 	if err != nil {
 		s.mu.Lock()
 		syncedAt := copyString(s.status.SyncedAt)
 		s.pending = nil
 		s.hasDigest = false
 		s.mu.Unlock()
-		s.publish(Status{Enabled: true, State: Failed, CheckedAt: &now, SyncedAt: syncedAt, Message: ptr("自动同步失败，已保留原凭证")})
+		message := "自动同步失败，已保留原凭证"
+		if errors.Is(err, store.ErrTargetAuthChanged) {
+			message = "当前认证文件持续变化，请重新检查"
+		}
+		s.publish(Status{Enabled: true, State: Failed, CheckedAt: &now, SyncedAt: syncedAt, Message: ptr(message)})
 		return
 	}
 	next := Status{Enabled: true, CheckedAt: &now, AccountID: result.AccountID, AccountName: result.AccountName}
